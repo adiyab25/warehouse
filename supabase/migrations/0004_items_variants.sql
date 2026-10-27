@@ -60,7 +60,13 @@ create table items (
   -- A serialised item (an asset with a unique tag) is tracked one-by-one.
   serialised boolean not null default false,
   active boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- `(tenant_id, id)` is redundant against the primary key alone, but the
+  -- COMPOSITE foreign keys below (from item_variants and location_levels) need a
+  -- unique constraint on exactly these columns to point at — and pointing at it
+  -- is what stops a variant or a level in tenant A from referencing an item in
+  -- tenant B. Same pattern 0003 used for a location's self-parent.
+  unique (tenant_id, id)
 );
 
 alter table items enable row level security;
@@ -75,7 +81,13 @@ grant select, insert, update, delete on items to authenticated;
 create table item_variants (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
-  item_id uuid not null references items(id) on delete restrict,
+  -- Tenant-scoped reference: a variant must point at an item in the SAME tenant.
+  -- A plain `references items(id)` would accept any tenant's id — a variant in
+  -- tenant A could hang off tenant B's item. The composite key (which needs the
+  -- `unique (tenant_id, id)` on items) makes the database refuse that. The link
+  -- is `on delete restrict`, so an item that still has a variant cannot be
+  -- deleted out from under it.
+  item_id uuid not null,
   -- `sku` and `barcode` are the identifiers a person TYPES or SCANS, so they
   -- are stored CANONICALISED: upper-cased and trimmed. `unique (tenant_id,
   -- sku)` and `unique (tenant_id, barcode)` are only case- and
@@ -92,7 +104,9 @@ create table item_variants (
   attrs jsonb not null default '{}'::jsonb,
   active boolean not null default true,
   unique (tenant_id, sku),
-  unique (tenant_id, barcode)
+  unique (tenant_id, barcode),
+  -- Tenant-scoped: a variant in tenant A may only reference a tenant-A item.
+  foreign key (tenant_id, item_id) references items (tenant_id, id) on delete restrict
 );
 
 alter table item_variants enable row level security;
@@ -107,14 +121,27 @@ grant select, insert, update, delete on item_variants to authenticated;
 create table location_levels (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
-  item_id uuid not null references items(id),
-  location_id uuid not null references locations(id),
+  -- Both references are tenant-scoped composites: a level in tenant A must
+  -- point at a tenant-A item AND a tenant-A location. A plain single-column
+  -- `references items(id)` / `references locations(id)` would accept another
+  -- tenant's id. `locations` carries `unique (tenant_id, id)` from 0003;
+  -- `items` gains it above.
+  item_id uuid not null,
+  location_id uuid not null,
   min_qty numeric(12, 3),
   max_qty numeric(12, 3),
   -- Exactly one level per (item, location) in a tenant: the unique index is what
   -- lets `setLocationLevel` upsert with `on conflict (tenant_id, item_id,
   -- location_id) do update` instead of racing a second row into existence.
-  unique (tenant_id, item_id, location_id)
+  unique (tenant_id, item_id, location_id),
+  -- A level is a reorder policy: a floor above its ceiling (min > max) is
+  -- nonsense and Task 16 turns these into replenishment alerts, so refuse it
+  -- here. Either bound may be NULL ("no bound on this side"), and a row with a
+  -- NULL on either side is simply not checked.
+  constraint location_levels_min_le_max_check
+    check (min_qty is null or max_qty is null or min_qty <= max_qty),
+  foreign key (tenant_id, item_id) references items (tenant_id, id),
+  foreign key (tenant_id, location_id) references locations (tenant_id, id)
 );
 
 alter table location_levels enable row level security;

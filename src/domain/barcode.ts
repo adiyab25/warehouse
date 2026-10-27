@@ -42,9 +42,11 @@ export function isValidScannedCode(raw: string): boolean {
 /**
  * Formats a sequence into a stable code: `formatSku('KG', 12)` → `'KG-0012'`.
  *
- * The sequence is zero-padded to a fixed width so codes sort in numeric order
- * and stay the same width as a person reads them. The prefix is upper-cased
- * like every other code; a sequence longer than the width is not truncated.
+ * The sequence is zero-padded to a fixed width (4) so codes stay the same width
+ * as a person reads them, and so they sort in numeric order *up to* that width.
+ * The padding is not a sort guarantee above it: a sequence past 9999 exceeds
+ * the width and is NOT truncated, so `'KG-10000'` sorts before `'KG-9999'` as a
+ * string. The prefix is upper-cased like every other code.
  */
 export function formatSku(prefix: string, seq: number): string {
   return `${prefix.trim().toUpperCase()}-${String(seq).padStart(4, '0')}`;

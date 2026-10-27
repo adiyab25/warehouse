@@ -162,12 +162,12 @@ export const tableNames = ['app_users', 'item_variants', 'items', 'location_leve
 export const foreignKeys = [
   { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
-  { table: 'item_variants', columns: 'item_id', definition: "FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT" },
   { table: 'item_variants', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'item_variants', columns: 'tenant_id,item_id', definition: "FOREIGN KEY (tenant_id, item_id) REFERENCES items(tenant_id, id) ON DELETE RESTRICT" },
   { table: 'items', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
-  { table: 'location_levels', columns: 'item_id', definition: "FOREIGN KEY (item_id) REFERENCES items(id)" },
-  { table: 'location_levels', columns: 'location_id', definition: "FOREIGN KEY (location_id) REFERENCES locations(id)" },
   { table: 'location_levels', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'location_levels', columns: 'tenant_id,item_id', definition: "FOREIGN KEY (tenant_id, item_id) REFERENCES items(tenant_id, id)" },
+  { table: 'location_levels', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
 ] as const;

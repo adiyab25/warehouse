@@ -1,4 +1,4 @@
-import { normaliseScannedCode } from '../domain/barcode.ts';
+import { isValidScannedCode, normaliseScannedCode } from '../domain/barcode.ts';
 import type { Queryable } from './client.ts';
 import type { Item, ItemVariant } from './types.ts';
 
@@ -11,6 +11,36 @@ export type { Item, ItemVariant };
 
 /** The `family` discriminator of an item, derived from the generated type. */
 export type ItemFamily = Item['family'];
+
+/**
+ * The typed shape of a variant's distinguishing attributes.
+ *
+ * The `attrs` column is `jsonb`, so the generated row type can only say
+ * `unknown` — every reader would otherwise hand-cast for size and colour and
+ * drift. This names the two attributes the backbone actually keys on today;
+ * {@link variantAttrs} is the one place that narrowing happens.
+ */
+export interface VariantAttrs {
+  size?: string;
+  colour?: string;
+}
+
+/**
+ * Reads a variant's `attrs` as {@link VariantAttrs}.
+ *
+ * `attrs` is `jsonb` (generated as `unknown`), so a raw value could be a
+ * string, a number, `null` or an array. The guard narrows only a real object
+ * to {@link VariantAttrs} and returns `{}` for anything else — a caller never
+ * has to defend against a non-object and never hand-casts.
+ */
+export function variantAttrs(v: ItemVariant): VariantAttrs {
+  const attrs = v.attrs;
+  if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
+    return attrs as VariantAttrs;
+  }
+  return {};
+}
+
 
 /** The input {@link createItem} accepts; `db` supplies the tenant. */
 export interface CreateItemInput {
@@ -55,6 +85,16 @@ export interface SetLocationLevelInput {
  * matching CHECK, so a value that somehow arrives un-normalised is refused
  * loudly rather than stored as a near-duplicate.
  *
+ * Both codes are also validated against the SAME shape rule the scan path uses
+ * ({@link isValidScannedCode}): a code that a scan would reject before lookup is
+ * refused here too, so the writer can never mint a catalogue item the scanner
+ * could never reach. The error names the offending field and value.
+ *
+ * This writes TWO rows (the item, then its variant) and is therefore NOT atomic
+ * on its own: call it inside the caller's tenant-scoped transaction — the
+ * `withTenant` block that scopes `app.tenant_id` — so a failure on the second
+ * insert rolls the first back with it and no orphan item survives.
+ *
  * The tenant is NOT a parameter: it is read from `app.tenant_id`, which
  * `withTenant` has pinned on this connection, so a caller cannot create a row
  * for a tenant it is not scoped to. Call this with the scoped `db` from inside
@@ -64,6 +104,19 @@ export async function createItem(
   db: Queryable,
   input: CreateItemInput,
 ): Promise<{ item: Item; variant: ItemVariant }> {
+  if (!isValidScannedCode(input.sku)) {
+    throw new Error(
+      `createItem: sku ${JSON.stringify(input.sku)} is not a valid scanned code ` +
+        '(expected PREFIX-SEQ, e.g. AB-0012)',
+    );
+  }
+  if (!isValidScannedCode(input.barcode)) {
+    throw new Error(
+      `createItem: barcode ${JSON.stringify(input.barcode)} is not a valid scanned code ` +
+        '(expected PREFIX-SEQ, e.g. AB-0012)',
+    );
+  }
+
   const { rows: itemRows } = await db.query<Item>(
     `insert into items
        (tenant_id, name_ar, name_en, family, category, uom, pack_factor,
@@ -116,14 +169,26 @@ export async function createItem(
  * matches nothing returns `null` — this is a pure read and NEVER creates an
  * item, which is what keeps a mistyped barcode from minting a row.
  *
+ * A DEACTIVATED item or variant resolves to `null` too: Review Focus #1 says a
+ * label that has been turned off must behave exactly like an unknown code. The
+ * query joins `items` and requires BOTH `items.active` and
+ * `item_variants.active`, so turning either off hides the scan without deleting
+ * a row (and without inventing a distinct error the callers would have to
+ * handle).
+ *
  * Call it with the scoped `db` from inside `withTenant`.
  */
 export async function findByBarcode(db: Queryable, code: string): Promise<ItemVariant | null> {
   const { rows } = await db.query<ItemVariant>(
-    `select *
-       from item_variants
-      where barcode = $1
-        and tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
+    `select v.*
+       from item_variants v
+       join items i
+         on i.id = v.item_id
+        and i.tenant_id = v.tenant_id
+      where v.barcode = $1
+        and v.active
+        and i.active
+        and v.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
     [normaliseScannedCode(code)],
   );
   return rows[0] ?? null;
