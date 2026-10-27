@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build/
+next-env.d.ts
+
+# env — never commit real credentials
+.env
+.env.local
+.env*.local
+
+# test + tooling output
+coverage/
+*.tsbuildinfo
+
+# supabase cli local state
+supabase/.temp/
+supabase/.branches/
+
+# os / editor noise
+.DS_Store
+Thumbs.db
+*.log

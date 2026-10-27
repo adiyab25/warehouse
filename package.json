@@ -1,0 +1,36 @@
+{
+  "name": "warehouse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inventory backbone — one warehouse feeding 14 branches. Movements are the truth, counts are derived.",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:reset": "node scripts/migrate.mjs --reset",
+    "db:check": "node scripts/db-check.mjs",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "ci": "tsc --noEmit && eslint . && npm test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bwip-js": "^4.11.4",
+    "next": "^16.4.3",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.3",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3"
+  }
+}
