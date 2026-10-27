@@ -32,6 +32,30 @@ export interface AppUserInsert {
   created_at?: Date;
 }
 
+export interface Location {
+  id: string;
+  tenant_id: string;
+  code: string;
+  name_ar: string;
+  name_en: string | null;
+  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'holder';
+  parent_id: string | null;
+  active: boolean;
+  created_at: Date;
+}
+
+export interface LocationInsert {
+  id?: string;
+  tenant_id: string;
+  code: string;
+  name_ar: string;
+  name_en?: string | null;
+  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'holder';
+  parent_id?: string | null;
+  active?: boolean;
+  created_at?: Date;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -47,6 +71,7 @@ export interface TenantInsert {
 /** Maps a table name to its row shape. */
 export interface Database {
   app_users: AppUser;
+  locations: Location;
   tenants: Tenant;
 }
 
@@ -54,9 +79,12 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'tenants'] as const;
+export const tableNames = ['app_users', 'locations', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
+  { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'locations', columns: 'parent_id', definition: "FOREIGN KEY (parent_id) REFERENCES locations(id)" },
+  { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
 ] as const;
