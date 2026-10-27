@@ -9,6 +9,11 @@
 // public.schema_migrations. Re-running applies nothing (idempotent).
 // Docker is not involved: this runner replaces `supabase db push` on machines
 // where the Supabase CLI cannot start a local stack.
+//
+// DATABASE_URL must be the database OWNER. Postgres makes whoever creates a
+// table its owner, and an owner bypasses that table's own RLS policies — so
+// running this as the non-superuser test role would make every later tenancy
+// test pass trivially. The tests assert the resulting ownership.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -21,71 +26,92 @@ const repoRoot = join(here, '..');
 const migrationsDir = join(repoRoot, 'supabase', 'migrations');
 const reset = process.argv.includes('--reset');
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  console.error('migrate: DATABASE_URL is not set');
+/** Every failure path exits non-zero with a single clean `migrate: …` line. */
+function fail(message) {
+  console.error(`migrate: ${message}`);
   process.exit(1);
 }
 
-const files = readdirSync(migrationsDir)
-  .filter((f) => f.endsWith('.sql'))
-  .sort();
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) fail('DATABASE_URL is not set');
+
+// Filenames are the ordering key. A name like `10_foo.sql` sorts before
+// `0009_…` lexicographically and would silently be applied out of order, so
+// reject anything that is not the four-digit `NNNN_name.sql` shape.
+const files = readdirSync(migrationsDir).filter((f) => f.endsWith('.sql'));
+for (const file of files) {
+  if (!/^\d{4}_/.test(file)) {
+    fail(
+      `migration filename "${file}" does not match /^\\d{4}_/ — rename it to "NNNN_${file}".sql (four digits, then underscore) so migrations sort in the intended order`,
+    );
+  }
+}
+files.sort();
 
 const client = new pg.Client({ connectionString, application_name: 'warehouse-migrate' });
-await client.connect();
-
-if (reset) {
-  // Only the database owner can do this; it is a development convenience.
-  // Re-granting after the recreate is required: dropping a schema also drops
-  // its pg_default_acl rows, so without this the non-superuser test role loses
-  // both CREATE on the schema and the privileges inherited by future tables.
-  await client.query(`
-    drop schema if exists public cascade;
-    create schema public;
-    grant usage, create on schema public to authenticated;
-    alter default privileges in schema public grant all on tables to authenticated;
-    alter default privileges in schema public grant all on sequences to authenticated;
-  `);
-  console.log('reset: dropped and recreated schema public');
+try {
+  await client.connect();
+} catch (err) {
+  fail(`could not connect to the database: ${err.message}`);
 }
 
-// Bookkeeping table exists from the very first run, so a failure half way
-// through a migration can never be mistaken for "already applied".
-await client.query(`
-  create table if not exists public.schema_migrations (
-    name text primary key,
-    applied_at timestamptz not null default now()
-  )
-`);
-
-const { rows } = await client.query('select name from public.schema_migrations');
-const applied = new Set(rows.map((r) => r.name));
-
-let count = 0;
-for (const file of files) {
-  if (applied.has(file)) continue;
-
-  const sql = readFileSync(join(migrationsDir, file), 'utf8');
-  try {
+try {
+  if (reset) {
+    // Only the database owner can do this; it is a development convenience.
+    // Re-granting after the recreate is required: dropping a schema also drops
+    // its pg_default_acl rows, so without this the non-superuser test role loses
+    // both CREATE on the schema and the privileges inherited by future tables.
+    // Wrapped in one transaction so a failure after `drop schema` rolls back and
+    // the database is never left with no `public` schema at all.
     await client.query('begin');
-    await client.query(sql);
-    await client.query('insert into public.schema_migrations (name) values ($1)', [file]);
+    await client.query('drop schema if exists public cascade');
+    await client.query('create schema public');
+    await client.query('grant usage, create on schema public to authenticated');
+    await client.query('alter default privileges in schema public grant all on tables to authenticated');
+    await client.query('alter default privileges in schema public grant all on sequences to authenticated');
     await client.query('commit');
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    console.error(`failed ${file}: ${err.message}`);
-    await client.end();
-    process.exit(1);
+    console.log('reset: dropped and recreated schema public');
   }
 
-  console.log(`applied ${file}`);
-  count += 1;
-}
+  // Bookkeeping table exists from the very first run, so a failure half way
+  // through a migration can never be mistaken for "already applied".
+  await client.query(`
+    create table if not exists public.schema_migrations (
+      name text primary key,
+      applied_at timestamptz not null default now()
+    )
+  `);
 
-if (count === 0) {
-  console.log('nothing to apply — database is up to date');
-} else {
-  console.log(`done: ${count} migration(s) applied`);
+  const { rows } = await client.query('select name from public.schema_migrations');
+  const applied = new Set(rows.map((r) => r.name));
+
+  let count = 0;
+  for (const file of files) {
+    if (applied.has(file)) continue;
+
+    const sql = readFileSync(join(migrationsDir, file), 'utf8');
+    await client.query('begin');
+    try {
+      await client.query(sql);
+      await client.query('insert into public.schema_migrations (name) values ($1)', [file]);
+      await client.query('commit');
+    } catch (err) {
+      await client.query('rollback').catch(() => {});
+      throw new Error(`failed ${file}: ${err.message}`);
+    }
+
+    console.log(`applied ${file}`);
+    count += 1;
+  }
+
+  if (count === 0) {
+    console.log('nothing to apply — database is up to date');
+  } else {
+    console.log(`done: ${count} migration(s) applied`);
+  }
+} catch (err) {
+  await client.end().catch(() => {});
+  fail(err.message);
 }
 
 await client.end();
