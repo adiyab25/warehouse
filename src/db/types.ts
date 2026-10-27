@@ -132,6 +132,7 @@ export interface LocationInsert {
 
 export interface StockMovement {
   id: string;
+  seq: string;
   tenant_id: string;
   variant_id: string;
   qty: string;
@@ -149,6 +150,7 @@ export interface StockMovement {
 
 export interface StockMovementInsert {
   id?: string;
+  seq: string;
   tenant_id: string;
   variant_id: string;
   qty: string;

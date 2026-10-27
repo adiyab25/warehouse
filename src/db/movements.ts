@@ -35,7 +35,14 @@ export interface PostMovementInput {
    */
   idempotencyKey?: string | null;
   notes?: string | null;
-  /** Whether the item is discrete; drives the whole-number rule. Default true. */
+  /**
+   * NOT authoritative. Discreteness is read from the item itself
+   * (`items.discrete`) inside the same transaction; this field, when supplied,
+   * is only an ASSERTION — it throws if it disagrees with the item, so a
+   * caller that thinks a measured item is discrete (or vice versa) is told
+   * loudly instead of silently posting a fractional quantity for half a
+   * jacket. Omit it; the item wins.
+   */
   discrete?: boolean;
 }
 
@@ -48,6 +55,17 @@ export interface PostMovementInput {
  * SQL is sent. The tenant is NOT a parameter — it is read from `app.tenant_id`,
  * which {@link withTenant} pinned — so a caller cannot post for a tenant it is
  * not scoped to.
+ *
+ * DISCRETENESS comes from the ITEM: the variant's item is read inside this same
+ * transaction and its `items.discrete` drives the whole-number rule. A
+ * caller-supplied `input.discrete` is NOT authoritative — it is only checked
+ * and throws when it contradicts the item — so a caller cannot post 0.5 of a
+ * half-jacket by claiming `discrete: false`.
+ *
+ * ROUNDING: `qty` lands in a `numeric(12, 3)` column, and Postgres ROUNDS on
+ * store rather than rejecting (1.2345 -> 1.235). Validation is the gate: this
+ * function only ever sends a quantity {@link validateMovement} accepted, and it
+ * must be the ONLY writer — a raw insert that bypasses it is silently rounded.
  *
  * IDEMPOTENT when `idempotencyKey` is supplied: the insert is
  * `on conflict (tenant_id, idempotency_key) do nothing returning id`, and when
@@ -62,10 +80,35 @@ export async function postMovement(
   db: Queryable,
   input: PostMovementInput,
 ): Promise<{ id: string; deduped: boolean }> {
+  // Discreteness is a property of the ITEM, so read it from the item — inside
+  // the caller's transaction, through the same composite tenant-scoped join the
+  // schema uses everywhere. A variant the caller cannot see (or that does not
+  // exist) has no row here and is refused.
+  const { rows: itemRows } = await db.query<{ discrete: boolean }>(
+    `select i.discrete
+       from item_variants v
+       join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
+      where v.id = $1
+        and v.tenant_id = ${TENANT}`,
+    [input.variantId],
+  );
+  const item = itemRows[0];
+  if (!item) {
+    throw new Error(`postMovement: variant ${input.variantId} was not found for this tenant`);
+  }
+
+  // `input.discrete`, if supplied, is only an assertion: the item is the source
+  // of truth, and a caller that disagrees is told rather than silently obeyed.
+  if (input.discrete !== undefined && input.discrete !== item.discrete) {
+    throw new Error(
+      `postMovement: discrete — caller asserted discrete=${input.discrete} but the item is discrete=${item.discrete}; the item wins`,
+    );
+  }
+
   const check = validateMovement({
     reason: input.reason,
     qty: input.qty,
-    discrete: input.discrete,
+    discrete: item.discrete,
     fromLocationId: input.fromLocationId,
     toLocationId: input.toLocationId,
   });
@@ -136,14 +179,22 @@ export async function postMovement(
  *
  * The view is `security_invoker`, so it is filtered by the caller's RLS exactly
  * like a direct read: a call scoped to one tenant never sees another's stock.
- * `qty` is a `numeric`, which node-postgres returns as a string.
+ * `qty` is a `numeric`, which node-postgres returns as a STRING — so this
+ * returns BOTH forms: the raw `qty` string (exact, for re-serialising) and a
+ * parsed `qtyNum: number` for arithmetic. Never do `+row.qty` or `qty * 2` on
+ * the string; use `qtyNum`.
+ *
+ * NO ZERO ROWS: a (variant, location) that never appears in the ledger has NO
+ * row here at all — absence means zero, not that stock is unknown. A consumer
+ * asking "how much of this item is at this location?" must LEFT JOIN to
+ * `on_hand` (or this list) and coalesce a miss to 0.
  *
  * Call it with the scoped `db` from inside `withTenant`.
  */
 export async function onHand(
   db: Queryable,
   filter: { variantId?: string; locationId?: string } = {},
-): Promise<Array<{ variantId: string; locationId: string; qty: string }>> {
+): Promise<Array<{ variantId: string; locationId: string; qty: string; qtyNum: number }>> {
   const { rows } = await db.query<{ variant_id: string; location_id: string; qty: string }>(
     `select variant_id, location_id, qty
        from on_hand
@@ -152,13 +203,25 @@ export async function onHand(
       order by variant_id, location_id`,
     [filter.variantId ?? null, filter.locationId ?? null],
   );
-  return rows.map((r) => ({ variantId: r.variant_id, locationId: r.location_id, qty: r.qty }));
+  return rows.map((r) => ({
+    variantId: r.variant_id,
+    locationId: r.location_id,
+    qty: r.qty,
+    qtyNum: Number(r.qty),
+  }));
 }
 
 /**
  * The full story of one variant's ledger, newest first — every movement its
  * stock is derived from, so an on-hand figure can always be traced back to the
  * rows that produced it.
+ *
+ * Ordered by `seq desc` — the monotonic insertion counter — NOT by
+ * `occurred_at desc, id desc`. `occurred_at` is a business timestamp a caller
+ * supplies and can repeat, and `id` is a random uuid, so ordering by those
+ * broke ties arbitrarily. `seq` is assigned in commit order, so two
+ * same-instant movements always come back in the order they were posted.
+ * `occurred_at` is still on every row for display.
  *
  * Call it with the scoped `db` from inside `withTenant`.
  */
@@ -167,7 +230,7 @@ export async function movementHistory(db: Queryable, variantId: string): Promise
     `select *
        from stock_movements
       where variant_id = $1
-      order by occurred_at desc, id desc`,
+      order by seq desc`,
     [variantId],
   );
   return rows;

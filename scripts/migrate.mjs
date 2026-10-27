@@ -67,7 +67,22 @@ try {
     await client.query('drop schema if exists public cascade');
     await client.query('create schema public');
     await client.query('grant usage, create on schema public to authenticated');
-    await client.query('alter default privileges in schema public grant all on tables to authenticated');
+    // Tables: grant ONLY the four privileges the app actually uses. Postgres
+    // hands the schema's default ACL (pg_default_acl) to every table created
+    // afterwards, and `alter default privileges` is ADDITIVE, so a bare
+    // `grant all` also bestows TRUNCATE, REFERENCES and TRIGGER on
+    // `authenticated`. TRUNCATE is NOT governed by row level security and the
+    // append-only guard is a BEFORE UPDATE OR DELETE row trigger that a
+    // TRUNCATE never fires — so one `truncate public.stock_movements` as the
+    // app role would empty the append-only ledger for EVERY tenant at once.
+    // REFERENCES / TRIGGER would let the app role bolt constraints and
+    // triggers onto the ledger. Revoke the wide default first (a no-op when
+    // the schema was just recreated, but it repairs a cluster whose default
+    // ACL predates this fix), then grant only the four.
+    await client.query('alter default privileges in schema public revoke all on tables from authenticated');
+    await client.query(
+      'alter default privileges in schema public grant select, insert, update, delete on tables to authenticated',
+    );
     await client.query('alter default privileges in schema public grant all on sequences to authenticated');
     await client.query('commit');
     console.log('reset: dropped and recreated schema public');

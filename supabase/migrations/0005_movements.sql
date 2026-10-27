@@ -17,6 +17,21 @@
 -- edit: a trigger raises on UPDATE and on DELETE, so the history a count is
 -- audited against cannot be rewritten after the fact.
 --
+-- PRIVILEGES: the app role holds only select, insert, update, delete on the
+-- ledger. TRUNCATE, REFERENCES and TRIGGER are explicitly revoked below. RLS
+-- does NOT govern TRUNCATE and the append-only guard is a BEFORE UPDATE OR
+-- DELETE row trigger that a TRUNCATE never fires, so without the revoke (and
+-- the BEFORE TRUNCATE trigger that backs it up) a single `truncate` as the app
+-- role would empty EVERY tenant's ledger. The reset runner likewise grants only
+-- the four privileges by default, so future tables inherit the narrow set.
+--
+-- ROUNDING (read carefully): `qty` is `numeric(12, 3)`. Postgres ROUNDS on
+-- store rather than rejecting — a raw insert of 1.2345 is kept as 1.235 and
+-- 0.0005 as 0.001. That is silent data change for any writer that bypasses
+-- validation, so the DATABASE does not enforce a decimal limit and must not be
+-- relied on to: validateMovement in src/domain/movement.ts is the required gate
+-- and every writer (including postMovement) must go through it.
+--
 -- Copies the RLS shape 0002 established and 0003/0004 repeated:
 --   * `tenant_id uuid not null references tenants(id)`
 --   * a policy `tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`
@@ -35,6 +50,13 @@ alter table app_users
 
 create table stock_movements (
   id uuid primary key default gen_random_uuid(),
+  -- A monotonic insertion counter. `occurred_at` is a business timestamp a
+  -- caller supplies and CAN repeat (a batch of rows imports with one instant),
+  -- and `id` is a random uuid, so `order by occurred_at desc, id desc` breaks
+  -- ties arbitrarily. `seq` is assigned in commit order and is the deterministic
+  -- tie-breaker `movementHistory` orders by, so two same-instant movements
+  -- always come back in the order they were posted.
+  seq bigint generated always as identity,
   tenant_id uuid not null references tenants(id),
   -- Tenant-scoped composite FK: a movement in tenant A must point at a variant
   -- in tenant A. A plain `references item_variants(id)` would accept another
@@ -110,6 +132,14 @@ create policy stock_movements_tenant_isolation on stock_movements
 
 grant select, insert, update, delete on stock_movements to authenticated;
 
+-- Belt and braces with the reset runner's default-ACL fix: revoke the three
+-- privileges the app role must never hold, on this table AND the view/table
+-- that derive from it. TRUNCATE would empty the (RLS-exempt) ledger for every
+-- tenant; REFERENCES/TRIGGER would let the app role attach constraints or
+-- triggers to it. has_table_privilege reports the same three as granted on the
+-- view, so they are revoked there too.
+revoke truncate, references, trigger on stock_movements from authenticated;
+
 -- Dedupe: a re-sent movement carrying the same client key lands once. Partial,
 -- so the many rows with no key at all never collide with each other.
 create unique index stock_movements_tenant_idempotency_key_idx
@@ -139,6 +169,17 @@ create trigger stock_movements_no_update
 create trigger stock_movements_no_delete
   before delete on stock_movements
   for each row execute function stock_movements_append_only();
+
+-- Statement-level guard against TRUNCATE. The row triggers above only fire on
+-- UPDATE/DELETE, and RLS never sees TRUNCATE, so a mistaken `grant truncate`
+-- would let the app role empty every tenant's ledger in one statement. This
+-- trigger raises the SAME restrict_violation a truncate would otherwise slip
+-- past, so the ledger survives a future grant/ACL mistake. It is disabled for
+-- the owner under `session_replication_role = replica`, which is exactly how
+-- the test teardown clears rows.
+create trigger stock_movements_no_truncate
+  before truncate on stock_movements
+  for each statement execute function stock_movements_append_only();
 
 -- A movement may only reference an ACTIVE item/variant. A withdrawn product
 -- must not receive stock — the same deactivation lesson Task 4 learned for the
@@ -195,6 +236,15 @@ create trigger stock_movements_require_active
 -- the view run as the CALLER, so the RLS policy on `stock_movements` filters it
 -- exactly as it would a direct read. (The RLS convention guard cannot see this:
 -- a view is not a base table, so it is not reflected over.)
+--
+-- CONTRACT (the shape later tasks depend on):
+--   * `qty` is `numeric`, so a driver returns it as a STRING — turn it into a
+--     number with src/db/movements.ts::onHand's `qtyNum`, never with `+`.
+--   * there is NO zero-row filter: a (variant, location) whose movements
+--     net to exactly zero is still returned with qty = 0.
+--   * a (variant, location) that NEVER appears in the ledger has NO ROW here at
+--     all, so a consumer reading "stock for an item at a location" must LEFT
+--     JOIN to this view and coalesce the miss to zero.
 create view on_hand with (security_invoker = true) as
 with deltas as (
   select variant_id, to_location_id as location_id, qty as delta
@@ -212,6 +262,12 @@ select variant_id,
  group by variant_id, location_id;
 
 grant select on on_hand to authenticated;
+
+-- The view inherits the same seven-privilege default ACL the tables do (a
+-- "table" grant covers views), so revoke the three here as well. A view cannot
+-- be truncated, but the guard asserts none of the three is held on ANY relation
+-- the app role can reach, so it is revoked for real rather than reasoned about.
+revoke truncate, references, trigger on on_hand from authenticated;
 
 -- `stock_snapshots`: a frozen as-of quantity for one (variant, location). The
 -- ledger stays the truth; a snapshot is a cache the reconciliation task can
@@ -243,3 +299,13 @@ create policy stock_snapshots_tenant_isolation on stock_snapshots
   with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 grant select, insert, update, delete on stock_snapshots to authenticated;
+
+-- Same three-privilege revoke as the ledger, and the same BEFORE TRUNCATE
+-- statement trigger. A snapshot is a cache, but truncating it as the app role
+-- is still a privilege that must not exist, and the trigger keeps a future
+-- grant mistake from wiping it.
+revoke truncate, references, trigger on stock_snapshots from authenticated;
+
+create trigger stock_snapshots_no_truncate
+  before truncate on stock_snapshots
+  for each statement execute function stock_movements_append_only();

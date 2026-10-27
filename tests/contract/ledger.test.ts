@@ -118,12 +118,14 @@ test('on_hand is the sum of movements per variant and location', { skip: !sqlTes
 
     await withTenant(db, t1, async (tdb) => {
       const rows = await onHand(tdb, { variantId: ctx.variantId });
+      // Keyed by location, not an array order: location ids are random uuids, so
+      // `order by location_id` is not a stable order to assert against.
       assert.deepEqual(
-        rows.map((r) => [r.locationId, r.qty]),
-        [
-          [ctx.branch.id, '3.000'],
-          [ctx.warehouse.id, '10.000'],
-        ],
+        Object.fromEntries(rows.map((r) => [r.locationId, r.qty])),
+        {
+          [ctx.branch.id]: '3.000',
+          [ctx.warehouse.id]: '10.000',
+        },
         'on_hand must be exactly the signed sum of the ledger — warehouse 10, branch 3',
       );
     });
@@ -142,12 +144,14 @@ test('on_hand is the sum of movements per variant and location', { skip: !sqlTes
 
     await withTenant(db, t1, async (tdb) => {
       const rows = await onHand(tdb, { variantId: ctx.variantId });
+      // Keyed by location: location ids are random uuids, so array order is not
+      // stable to assert against.
       assert.deepEqual(
-        rows.map((r) => [r.locationId, r.qty]),
-        [
-          [ctx.branch.id, '7.000'],
-          [ctx.warehouse.id, '6.000'],
-        ],
+        Object.fromEntries(rows.map((r) => [r.locationId, r.qty])),
+        {
+          [ctx.branch.id]: '7.000',
+          [ctx.warehouse.id]: '6.000',
+        },
         'a transfer must subtract from its source and add to its destination',
       );
     });
@@ -489,4 +493,264 @@ test('movementHistory returns a variant\u2019s rows newest first', { skip: !sqlT
       assert.equal(rows.length, 2);
     });
   });
+});
+
+// M3: `occurred_at` is caller-supplied and can repeat, and `id` is a random
+// uuid, so a tie broken by those is arbitrary. Ordering by `seq desc` (the
+// monotonic insertion counter) makes same-instant movements deterministic —
+// inserted last comes back first. Reverting the ORDER BY to
+// `occurred_at desc, id desc` makes this flaky; the assertion below pins it.
+test('movementHistory orders same-instant movements deterministically by insertion', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'SEQ'));
+
+    const instant = '2026-03-01T12:00:00Z';
+    const first = await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 1,
+        reason: 'receipt',
+        toLocationId: ctx.warehouse.id,
+        occurredAt: instant,
+      }),
+    );
+    const second = await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 2,
+        reason: 'receipt',
+        toLocationId: ctx.warehouse.id,
+        occurredAt: instant,
+      }),
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const rows = await movementHistory(tdb, ctx.variantId);
+      assert.deepEqual(
+        rows.map((r) => r.id),
+        [second.id, first.id],
+        'two movements sharing one occurred_at must come back in insertion order (newest insertion first)',
+      );
+      // Distinct seq values prove the tie-breaker exists and is monotonic.
+      assert.ok(
+        Number(rows[0]!.seq) > Number(rows[1]!.seq),
+        'seq must increase with insertion',
+      );
+    });
+  });
+});
+
+// M2: the on_hand contract. `qty` is a numeric, so the driver returns it as a
+// STRING; onHand hands back both the string and a parsed number. A
+// (variant, location) never in the ledger has NO row at all — absence means
+// zero, so consumers must LEFT JOIN and coalesce.
+test('onHand returns both a string and a numeric, and has no row for an untouched pair', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'M2'));
+
+    // A MEASURED item, so a fractional quantity is legal to post.
+    const measured = await withTenant(db, t1, (tdb) =>
+      createItem(tdb, {
+        nameAr: 'قماش',
+        nameEn: 'Fabric',
+        family: 'sellable',
+        sku: 'FAB-M2',
+        barcode: 'FAB-M2',
+        discrete: false,
+      }),
+    );
+
+    // Only the warehouse is ever touched; the branch never appears.
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: measured.variant.id,
+        qty: 2.5,
+        reason: 'receipt',
+        toLocationId: ctx.warehouse.id,
+      }),
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const rows = await onHand(tdb, { variantId: measured.variant.id });
+      const wh = rows.find((r) => r.locationId === ctx.warehouse.id);
+      assert.ok(wh, 'the touched location must have a row');
+      assert.equal(typeof wh!.qty, 'string', 'qty stays a string — node-postgres never parses numeric');
+      assert.equal(wh!.qty, '2.500');
+      assert.equal(typeof wh!.qtyNum, 'number', 'qtyNum is the parsed number for arithmetic');
+      assert.equal(wh!.qtyNum, 2.5);
+
+      assert.equal(
+        rows.some((r) => r.locationId === ctx.branch.id),
+        false,
+        'a (variant, location) with no ledger rows has NO row here — absence means zero, so consumers must LEFT JOIN and coalesce',
+      );
+    });
+  });
+});
+
+// Test gap: a FROM-only movement (an issue / write-off) must show up on the
+// from side as a negative on-hand. An inner-join or to-only view would drop it.
+test('on_hand reflects a FROM-only movement as a negative quantity', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'FROM'));
+
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, { variantId: ctx.variantId, qty: 10, reason: 'receipt', toLocationId: ctx.warehouse.id }),
+    );
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 4,
+        reason: 'issue_to_branch',
+        fromLocationId: ctx.warehouse.id,
+      }),
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const rows = await onHand(tdb, { variantId: ctx.variantId, locationId: ctx.warehouse.id });
+      assert.equal(rows.length, 1, 'the issue is a FROM-only row and must still appear');
+      assert.equal(rows[0]!.qty, '6.000', 'a from-only movement subtracts from its source');
+      assert.equal(rows[0]!.qtyNum, 6);
+    });
+  });
+});
+
+// Test gap: the DB-level `sides_differ` CHECK, exercised with a RAW insert that
+// bypasses validateMovement. Dropping the CHECK makes this insert succeed.
+test('the database refuses a raw insert whose from and to are the same location', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'SD'));
+
+    await withTenant(db, t1, async (tdb) => {
+      await assert.rejects(
+        () =>
+          tdb.query(
+            `insert into stock_movements (tenant_id, variant_id, qty, from_location_id, to_location_id, reason)
+             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, 1, $2, $2, 'transfer')`,
+            [ctx.variantId, ctx.warehouse.id],
+          ),
+        /stock_movements_sides_differ_check|check constraint/i,
+        'a raw insert from a place to the same place must be refused by the CHECK',
+      );
+    });
+  });
+});
+
+// I1: numeric(12,3) ROUNDS instead of rejecting. A raw insert that bypasses
+// validateMovement silently changes the number (1.2345 -> 1.235), so this test
+// PINS the behaviour as known and intentional, and documents that
+// validateMovement is the required gate rather than the column.
+test('a raw over-precise quantity is ROUNDED by numeric(12,3), not rejected', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'RND'));
+
+    const posted = await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ id: string; qty: string }>(
+        `insert into stock_movements (tenant_id, variant_id, qty, to_location_id, reason)
+         values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, 1.2345, $2, 'receipt')
+         returning id, qty`,
+        [ctx.variantId, ctx.warehouse.id],
+      );
+      return rows[0]!;
+    });
+
+    assert.equal(
+      posted.qty,
+      '1.235',
+      'numeric(12,3) ROUNDS 1.2345 to 1.235 — the DB does not reject over-precision, so validateMovement is the gate',
+    );
+  });
+});
+
+// I2: discreteness is a property of the ITEM, not the caller. Setup's item is
+// discrete (the default). A fractional post must fail EVEN WHEN the caller
+// claims discrete:false, because that claim is only an assertion checked
+// against items.discrete.
+test('posting a fraction of a discrete item fails even when the caller claims discrete:false', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'HALF'));
+
+    // No claim at all: the item's discreteness rejects the fraction.
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          postMovement(tdb, { variantId: ctx.variantId, qty: 0.5, reason: 'receipt', toLocationId: ctx.warehouse.id }),
+        ),
+      /not a whole number/,
+      'half a discrete item must be refused',
+    );
+
+    // The caller LIES (discrete: false): the item still wins and the post fails.
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          postMovement(tdb, {
+            variantId: ctx.variantId,
+            qty: 0.5,
+            reason: 'receipt',
+            toLocationId: ctx.warehouse.id,
+            discrete: false,
+          }),
+        ),
+      /discrete/,
+      'a caller cannot override the item’s discreteness — the assertion throws',
+    );
+
+    // A genuinely measured item accepts the same fraction.
+    const measured = await withTenant(db, t1, (tdb) =>
+      createItem(tdb, {
+        nameAr: 'قماش',
+        nameEn: 'Fabric',
+        family: 'sellable',
+        sku: 'FAB-HALF',
+        barcode: 'FAB-HALF',
+        discrete: false,
+      }),
+    );
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: measured.variant.id,
+        qty: 0.5,
+        reason: 'receipt',
+        toLocationId: ctx.warehouse.id,
+      }),
+    );
+    await withTenant(db, t1, async (tdb) => {
+      const rows = await onHand(tdb, { variantId: measured.variant.id });
+      assert.equal(rows[0]!.qty, '0.500', 'a measured item accepts and stores a fraction');
+    });
+  });
+});
+
+// Test gap: the idempotency index must be PARTIAL (carry a WHERE), not a plain
+// unique index. Replacing it with a plain unique index drops the predicate.
+test('the idempotency key index is PARTIAL, not a plain unique index', { skip: !migrateUrl() }, async () => {
+  const owner = new Client({ connectionString: migrateUrl()! });
+  await owner.connect();
+  try {
+    const { rows } = await owner.query<{ is_partial: boolean; inddef: string }>(
+      `select (i.indpred is not null)               as is_partial,
+              pg_get_indexdef(i.indexrelid)        as inddef
+         from pg_index i
+         join pg_class c on c.oid = i.indexrelid
+        where c.relname = 'stock_movements_tenant_idempotency_key_idx'`,
+    );
+    assert.equal(rows.length, 1, 'the partial unique index must exist');
+    assert.equal(rows[0]!.is_partial, true, 'the index must carry a WHERE predicate (partial), not be a plain unique index');
+    assert.match(rows[0]!.inddef, /where/i, 'the index definition must show its partial predicate');
+  } finally {
+    await owner.end();
+  }
 });
