@@ -130,6 +130,50 @@ export interface LocationInsert {
   created_at?: Date;
 }
 
+export interface ReceiptLine {
+  id: string;
+  tenant_id: string;
+  receipt_id: string;
+  variant_id: string;
+  expected_qty: string;
+  received_qty: string | null;
+  variance_qty: string | null;
+}
+
+export interface ReceiptLineInsert {
+  id?: string;
+  tenant_id: string;
+  receipt_id: string;
+  variant_id: string;
+  expected_qty: string;
+  received_qty?: string | null;
+  variance_qty?: string | null;
+}
+
+export interface Receipt {
+  id: string;
+  tenant_id: string;
+  source_location_id: string;
+  dest_location_id: string;
+  ref_no: string | null;
+  status: 'draft' | 'posted';
+  received_by: string | null;
+  received_at: Date | null;
+  created_at: Date;
+}
+
+export interface ReceiptInsert {
+  id?: string;
+  tenant_id: string;
+  source_location_id: string;
+  dest_location_id: string;
+  ref_no?: string | null;
+  status?: 'draft' | 'posted';
+  received_by?: string | null;
+  received_at?: Date | null;
+  created_at?: Date;
+}
+
 export interface StockMovement {
   id: string;
   seq: string;
@@ -203,6 +247,8 @@ export interface Database {
   items: Item;
   location_levels: LocationLevel;
   locations: Location;
+  receipt_lines: ReceiptLine;
+  receipts: Receipt;
   stock_movements: StockMovement;
   stock_snapshots: StockSnapshot;
   tenants: Tenant;
@@ -212,7 +258,7 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
@@ -226,6 +272,13 @@ export const foreignKeys = [
   { table: 'location_levels', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'receipt_lines', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'receipt_lines', columns: 'tenant_id,receipt_id', definition: "FOREIGN KEY (tenant_id, receipt_id) REFERENCES receipts(tenant_id, id) ON DELETE CASCADE" },
+  { table: 'receipt_lines', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
+  { table: 'receipts', columns: 'tenant_id,dest_location_id', definition: "FOREIGN KEY (tenant_id, dest_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'receipts', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'receipts', columns: 'tenant_id,received_by', definition: "FOREIGN KEY (tenant_id, received_by) REFERENCES app_users(tenant_id, id)" },
+  { table: 'receipts', columns: 'tenant_id,source_location_id', definition: "FOREIGN KEY (tenant_id, source_location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id,actor_user_id', definition: "FOREIGN KEY (tenant_id, actor_user_id) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'stock_movements', columns: 'tenant_id,from_location_id', definition: "FOREIGN KEY (tenant_id, from_location_id) REFERENCES locations(tenant_id, id)" },
