@@ -232,3 +232,161 @@ test('app_users.branch_location_id references locations', { skip: !sqlTestUrl() 
     });
   });
 });
+
+// A bin is not a top-level place: it hangs off the warehouse it sits in. The
+// linkage must round-trip through the column, not just be accepted on insert.
+test('a bin can be created under a warehouse and the linkage reads back', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const { warehouse, bin } = await withTenant(db, t1, async (tdb) => {
+      const warehouse = await createLocation(tdb, { code: 'WH-1', nameAr: 'المخزن', type: 'warehouse' });
+      const bin = await createLocation(tdb, {
+        code: 'BIN-1',
+        nameAr: 'رف ١',
+        type: 'bin',
+        parentId: warehouse.id,
+      });
+      return { warehouse, bin };
+    });
+
+    assert.equal(bin.type, 'bin');
+    assert.equal(bin.parent_id, warehouse.id, 'the bin records its parent on insert');
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ parent_id: string | null }>(
+        'select parent_id from locations where code = $1',
+        ['BIN-1'],
+      );
+      assert.equal(rows[0]!.parent_id, warehouse.id, 'the linkage is readable back from the database');
+    });
+  });
+});
+
+// Regression for the tenant-blind parent: a plain `references locations(id)`
+// accepts ANY tenant's id, so a bin in tenant A could silently parent off a
+// location in tenant B and graft one branch's history onto another. The
+// composite `foreign key (tenant_id, parent_id) references locations (tenant_id,
+// id)` must refuse it. This test fails if the composite FK is removed.
+test('a bin cannot parent off a location in another tenant', { skip: !sqlTestUrl() }, async () => {
+  const { t1, t2 } = await provision();
+
+  await withDb(async (db) => {
+    const foreignParent = await withTenant(db, t2, (tdb) =>
+      createLocation(tdb, { code: 'BR-99', nameAr: 'فرع ب', type: 'branch' }),
+    );
+    const warehouse = await withTenant(db, t1, (tdb) =>
+      createLocation(tdb, { code: 'WH-1', nameAr: 'المخزن', type: 'warehouse' }),
+    );
+
+    // A rejected statement aborts the transaction, so the failure probe gets its
+    // own withTenant and the positive control gets another.
+    await withTenant(db, t1, async (tdb) => {
+      await assert.rejects(
+        () =>
+          createLocation(tdb, {
+            code: 'BIN-X',
+            nameAr: 'x',
+            type: 'bin',
+            parentId: foreignParent.id,
+          }),
+        /foreign key|violates foreign key/i,
+        'a bin must not parent off a location owned by another tenant',
+      );
+    });
+
+    // Positive control: the identical insert succeeds with a same-tenant parent,
+    // so the refusal above proves tenancy, not that the FK rejects everything.
+    await withTenant(db, t1, (tdb) =>
+      createLocation(tdb, { code: 'BIN-OK', nameAr: 'y', type: 'bin', parentId: warehouse.id }),
+    );
+  });
+});
+
+// `active` is how a location is retired without deleting the history that points
+// at it. It must default on, and must be flip-off-able.
+test('a location is active by default and can be deactivated', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const loc = await withTenant(db, t1, (tdb) =>
+      createLocation(tdb, { code: 'BR-07', nameAr: 'فرع ٧', type: 'branch' }),
+    );
+    assert.equal(loc.active, true, 'a freshly created location is active');
+
+    const deactivated = await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ active: boolean }>(
+        'update locations set active = false where id = $1 returning active',
+        [loc.id],
+      );
+      return rows[0]!;
+    });
+    assert.equal(deactivated.active, false, 'a location can be deactivated');
+  });
+});
+
+// Regression for the type CHECK: Task 8's returns route damaged goods to a
+// quarantine location, so 'quarantine' must be an accepted type — and the CHECK
+// must still reject a type it does not know. This test fails if the CHECK is
+// dropped (a bogus type would then be accepted).
+test('the type CHECK accepts quarantine and rejects a bogus type', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const quarantine = await withTenant(db, t1, (tdb) =>
+      createLocation(tdb, { code: 'QRN-1', nameAr: 'حجر', type: 'quarantine' }),
+    );
+    assert.equal(quarantine.type, 'quarantine', "'quarantine' is an accepted location type");
+
+    await withTenant(db, t1, async (tdb) => {
+      await assert.rejects(
+        () =>
+          tdb.query(
+            "insert into locations (tenant_id, code, name_ar, type) values (nullif(current_setting('app.tenant_id', true), '')::uuid, 'BOGUS', 'x', 'nonsense')",
+          ),
+        /check constraint/i,
+        'a type the CHECK does not list must be refused',
+      );
+    });
+  });
+});
+
+// Regression for code normalisation: `unique (tenant_id, code)` is case- and
+// whitespace-sensitive, so without canonicalising, 'BR-04', 'br-04' and
+// 'BR-04 ' would be three codes and silently split one branch's history in two.
+// createLocation canonicalises; the database CHECK refuses a raw insert that
+// does not. This test fails if the CHECK is dropped (a raw non-normalised insert
+// would then succeed).
+test('location codes are normalised to upper-case and trimmed', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const loc = await withTenant(db, t1, (tdb) =>
+      createLocation(tdb, { code: ' br-04 ', nameAr: 'فرع ٤', type: 'branch' }),
+    );
+    assert.equal(loc.code, 'BR-04', 'createLocation trims and upper-cases the code');
+
+    // A different spelling of the same code must collide on the unique index.
+    await withTenant(db, t1, async (tdb) => {
+      await assert.rejects(
+        () => createLocation(tdb, { code: 'Br-04', nameAr: 'فرع ٤ مكرر', type: 'branch' }),
+        /duplicate key|unique/i,
+        'a second spelling of an existing code must be refused',
+      );
+    });
+
+    // The database refuses a non-normalised code even when a raw SQL insert
+    // bypasses createLocation's normalisation.
+    await withTenant(db, t1, async (tdb) => {
+      await assert.rejects(
+        () =>
+          tdb.query(
+            "insert into locations (tenant_id, code, name_ar, type) values (nullif(current_setting('app.tenant_id', true), '')::uuid, 'br-99', 'x', 'branch')",
+          ),
+        /check constraint|locations_code_normalised_check/i,
+        'a raw insert of a non-normalised code must be refused',
+      );
+    });
+  });
+});
+

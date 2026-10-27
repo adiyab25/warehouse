@@ -34,18 +34,35 @@
 create table locations (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
-  code text not null,
+  -- A code identifies a place within one tenant, and is stored CANONICALISED:
+  -- upper-cased and trimmed. `unique (tenant_id, code)` is only case- and
+  -- whitespace-sensitive by default, so without normalising, 'BR-04', 'br-04'
+  -- and 'BR-04 ' would be three distinct codes — silently splitting one
+  -- branch's ledger across three rows. The CHECK makes that impossible even for
+  -- a raw SQL insert that bypasses src/db/locations.ts.
+  code text not null constraint locations_code_normalised_check check (code = upper(btrim(code))),
   name_ar text not null,
   name_en text,
-  type text not null check (type in ('warehouse', 'bin', 'branch', 'transit', 'vendor', 'scrap', 'holder')),
-  parent_id uuid references locations(id),
+  type text not null check (type in ('warehouse', 'bin', 'branch', 'transit', 'vendor', 'scrap', 'quarantine', 'holder')),
+  parent_id uuid,
   active boolean not null default true,
   created_at timestamptz not null default now(),
   -- A code identifies a place within one tenant. The per-tenant unique index is
   -- also what lets `transitLocation` upsert its singleton with
   -- `on conflict (tenant_id, code) do nothing`: without it two concurrent
   -- callers could each insert a transit row.
-  unique (tenant_id, code)
+  unique (tenant_id, code),
+  -- `(tenant_id, id)` is redundant against the primary key alone, but the
+  -- COMPOSITE parent foreign key below needs a unique constraint on exactly
+  -- these columns to point at — and pointing at it is what stops a bin in
+  -- tenant A from parenting off a location in tenant B.
+  unique (tenant_id, id),
+  -- Tenant-scoped self-reference: a parent must live in the SAME tenant. A
+  -- plain `references locations(id)` would accept any tenant's id; the
+  -- composite key makes the database refuse a cross-tenant parent. Kept
+  -- nullable — top-level locations (the warehouse, branches, transit) have no
+  -- parent, and a composite FK with a NULL column is simply not enforced.
+  foreign key (tenant_id, parent_id) references locations (tenant_id, id)
 );
 
 alter table locations enable row level security;

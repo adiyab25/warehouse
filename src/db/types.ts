@@ -38,7 +38,7 @@ export interface Location {
   code: string;
   name_ar: string;
   name_en: string | null;
-  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'holder';
+  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'quarantine' | 'holder';
   parent_id: string | null;
   active: boolean;
   created_at: Date;
@@ -50,7 +50,7 @@ export interface LocationInsert {
   code: string;
   name_ar: string;
   name_en?: string | null;
-  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'holder';
+  type: 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'quarantine' | 'holder';
   parent_id?: string | null;
   active?: boolean;
   created_at?: Date;
@@ -85,6 +85,6 @@ export const tableNames = ['app_users', 'locations', 'tenants'] as const;
 export const foreignKeys = [
   { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
-  { table: 'locations', columns: 'parent_id', definition: "FOREIGN KEY (parent_id) REFERENCES locations(id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
 ] as const;
