@@ -32,6 +32,80 @@ export interface AppUserInsert {
   created_at?: Date;
 }
 
+export interface ItemVariant {
+  id: string;
+  tenant_id: string;
+  item_id: string;
+  sku: string;
+  barcode: string;
+  attrs: unknown;
+  active: boolean;
+}
+
+export interface ItemVariantInsert {
+  id?: string;
+  tenant_id: string;
+  item_id: string;
+  sku: string;
+  barcode: string;
+  attrs?: unknown;
+  active?: boolean;
+}
+
+export interface Item {
+  id: string;
+  tenant_id: string;
+  name_ar: string;
+  name_en: string | null;
+  family: 'sellable' | 'consumable' | 'asset';
+  category: string | null;
+  uom: string;
+  pack_factor: string | null;
+  discrete: boolean;
+  cost_egp: string;
+  supplier: string | null;
+  lead_time_days: number | null;
+  serialised: boolean;
+  active: boolean;
+  created_at: Date;
+}
+
+export interface ItemInsert {
+  id?: string;
+  tenant_id: string;
+  name_ar: string;
+  name_en?: string | null;
+  family: 'sellable' | 'consumable' | 'asset';
+  category?: string | null;
+  uom?: string;
+  pack_factor?: string | null;
+  discrete?: boolean;
+  cost_egp?: string;
+  supplier?: string | null;
+  lead_time_days?: number | null;
+  serialised?: boolean;
+  active?: boolean;
+  created_at?: Date;
+}
+
+export interface LocationLevel {
+  id: string;
+  tenant_id: string;
+  item_id: string;
+  location_id: string;
+  min_qty: string | null;
+  max_qty: string | null;
+}
+
+export interface LocationLevelInsert {
+  id?: string;
+  tenant_id: string;
+  item_id: string;
+  location_id: string;
+  min_qty?: string | null;
+  max_qty?: string | null;
+}
+
 export interface Location {
   id: string;
   tenant_id: string;
@@ -71,6 +145,9 @@ export interface TenantInsert {
 /** Maps a table name to its row shape. */
 export interface Database {
   app_users: AppUser;
+  item_variants: ItemVariant;
+  items: Item;
+  location_levels: LocationLevel;
   locations: Location;
   tenants: Tenant;
 }
@@ -79,12 +156,18 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'locations', 'tenants'] as const;
+export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
   { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'item_variants', columns: 'item_id', definition: "FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT" },
+  { table: 'item_variants', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'items', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'location_levels', columns: 'item_id', definition: "FOREIGN KEY (item_id) REFERENCES items(id)" },
+  { table: 'location_levels', columns: 'location_id', definition: "FOREIGN KEY (location_id) REFERENCES locations(id)" },
+  { table: 'location_levels', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
 ] as const;
