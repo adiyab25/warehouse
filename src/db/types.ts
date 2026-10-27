@@ -130,6 +130,58 @@ export interface LocationInsert {
   created_at?: Date;
 }
 
+export interface StockMovement {
+  id: string;
+  tenant_id: string;
+  variant_id: string;
+  qty: string;
+  from_location_id: string | null;
+  to_location_id: string | null;
+  reason: 'receipt' | 'issue_to_branch' | 'transfer' | 'return_from_branch' | 'consumption' | 'sale' | 'count_correction' | 'write_off' | 'opening_balance';
+  actor_user_id: string | null;
+  actor_api_client_id: string | null;
+  occurred_at: Date;
+  ref_type: string | null;
+  ref_id: string | null;
+  idempotency_key: string | null;
+  notes: string | null;
+}
+
+export interface StockMovementInsert {
+  id?: string;
+  tenant_id: string;
+  variant_id: string;
+  qty: string;
+  from_location_id?: string | null;
+  to_location_id?: string | null;
+  reason: 'receipt' | 'issue_to_branch' | 'transfer' | 'return_from_branch' | 'consumption' | 'sale' | 'count_correction' | 'write_off' | 'opening_balance';
+  actor_user_id?: string | null;
+  actor_api_client_id?: string | null;
+  occurred_at?: Date;
+  ref_type?: string | null;
+  ref_id?: string | null;
+  idempotency_key?: string | null;
+  notes?: string | null;
+}
+
+export interface StockSnapshot {
+  tenant_id: string;
+  variant_id: string;
+  item_id: string;
+  location_id: string;
+  as_of: Date;
+  qty: string | null;
+}
+
+export interface StockSnapshotInsert {
+  tenant_id: string;
+  variant_id: string;
+  item_id: string;
+  location_id: string;
+  as_of: Date;
+  qty?: string | null;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -149,6 +201,8 @@ export interface Database {
   items: Item;
   location_levels: LocationLevel;
   locations: Location;
+  stock_movements: StockMovement;
+  stock_snapshots: StockSnapshot;
   tenants: Tenant;
 }
 
@@ -156,7 +210,7 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'tenants'] as const;
+export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
@@ -170,4 +224,13 @@ export const foreignKeys = [
   { table: 'location_levels', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'stock_movements', columns: 'tenant_id,actor_user_id', definition: "FOREIGN KEY (tenant_id, actor_user_id) REFERENCES app_users(tenant_id, id)" },
+  { table: 'stock_movements', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'stock_movements', columns: 'tenant_id,from_location_id', definition: "FOREIGN KEY (tenant_id, from_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'stock_movements', columns: 'tenant_id,to_location_id', definition: "FOREIGN KEY (tenant_id, to_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'stock_movements', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
+  { table: 'stock_snapshots', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'stock_snapshots', columns: 'tenant_id,item_id', definition: "FOREIGN KEY (tenant_id, item_id) REFERENCES items(tenant_id, id)" },
+  { table: 'stock_snapshots', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'stock_snapshots', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
 ] as const;
