@@ -2,8 +2,19 @@
 --
 -- Every later table copies the shape established here:
 --   * `tenant_id uuid not null references tenants(id)`
---   * a policy `tenant_id = current_setting('app.tenant_id', true)::uuid`
+--   * a policy
+--       `tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`
 --   * `alter table <t> force row level security`
+--
+-- The `nullif(…, '')` is load-bearing, not decoration. Once a placeholder GUC
+-- like `app.tenant_id` has been assigned inside a transaction, Postgres keeps
+-- the placeholder after the transaction ends and reverts it to the empty string
+-- — so on a *warm* pooled connection (one that has already served a withTenant)
+-- a bare query sees `current_setting('app.tenant_id', true) = ''` and a plain
+-- `::uuid` cast raises `invalid input syntax for type uuid: ""`, while a cold
+-- connection returns NULL and simply matches no rows. `nullif(…, '')` turns the
+-- reverted `''` back into NULL so the policy behaves identically warm or cold:
+-- zero rows, never an error.
 --
 -- The tenant is set with `select set_config('app.tenant_id', $1, true)` inside
 -- a transaction (see src/db/client.ts::withTenant). `SET LOCAL app.tenant_id =
@@ -31,8 +42,8 @@ alter table tenants enable row level security;
 alter table tenants force row level security;
 
 create policy tenants_tenant_isolation on tenants
-  using (id = current_setting('app.tenant_id', true)::uuid)
-  with check (id = current_setting('app.tenant_id', true)::uuid);
+  using (id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+  with check (id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 create table app_users (
   id uuid primary key default gen_random_uuid(),
@@ -53,8 +64,8 @@ alter table app_users force row level security;
 -- limited to the current tenant, and inserts/updates may not write a row that
 -- belongs to any other tenant.
 create policy app_users_tenant_isolation on app_users
-  using (tenant_id = current_setting('app.tenant_id', true)::uuid)
-  with check (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+  with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 -- The running app connects as `authenticated`; the migration owner (`postgres`)
 -- already grants via default privileges, but be explicit so the grants survive

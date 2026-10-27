@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 // Catalog-driven TypeScript type generator.
 //
-//   DATABASE_URL=postgresql://… node scripts/gen-types.mjs
+//   MIGRATE_DATABASE_URL=postgresql://… node scripts/gen-types.mjs
 //
 // Writes src/db/types.ts by reading the LIVE catalogue — information_schema
-// .columns plus pg_constraint — rather than guessing. It exists because
-// `supabase gen types` needs a local Docker stack, which this machine does not
-// have. The output is committed and reviewed by hand; re-run it after any
-// migration that changes a table.
+// .columns plus pg_constraint and pg_enum — rather than guessing. It exists
+// because `supabase gen types` needs a local Docker stack, which this machine
+// does not have. The output is committed and reviewed by hand; re-run it after
+// any migration that changes a table.
 //
-// It connects as the OWNER (DATABASE_URL / MIGRATE_DATABASE_URL): reading the
-// catalogue does not touch row data, and the owner can see every table.
+// It connects as the OWNER (MIGRATE_DATABASE_URL / DATABASE_URL): reading the
+// catalogue does not touch row data, and only the owner can see every table.
+// The non-owner test role is deliberately NOT accepted as a fallback — a
+// connection that cannot see every table would silently under-generate types.
 //
 // The output is deterministic — tables and columns are ordered, and no
 // timestamp is embedded — so a no-op run produces no diff.
@@ -30,17 +32,23 @@ const outFile = join(repoRoot, 'src', 'db', 'types.ts');
 const EXCLUDED = new Set(['schema_migrations']);
 
 const connectionString =
-  process.env.MIGRATE_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  process.env.SQL_TEST_DATABASE_URL;
+  process.env.MIGRATE_DATABASE_URL ?? process.env.DATABASE_URL;
 
 if (!connectionString) {
-  console.error('gen-types: set MIGRATE_DATABASE_URL or DATABASE_URL');
+  console.error(
+    'gen-types: set MIGRATE_DATABASE_URL (or DATABASE_URL) to the database OWNER url — ' +
+      'the catalogue reader must see every table, so the non-owner app role is not accepted',
+  );
   process.exit(1);
 }
 
-/** information_schema/udt_name → TypeScript type. */
-function tsType(udtName) {
+/** A single udt_name → TypeScript type, ignoring array/enum wrapping. */
+function baseTsType(udtName, enumsByType) {
+  // A real Postgres enum (pg_enum) becomes a string union — without this it
+  // would fall through to `unknown` and silently lose its type.
+  const labels = enumsByType.get(udtName);
+  if (labels) return labels.map((v) => `'${v}'`).join(' | ');
+
   switch (udtName) {
     case 'uuid':
     case 'text':
@@ -73,25 +81,54 @@ function tsType(udtName) {
   }
 }
 
-/** `app_users` → `AppUser`; `tenants` → `Tenant`. */
+/**
+ * `information_schema`/`udt_name` → TypeScript type, including the `_xxx`
+ * array form Postgres uses for array columns (`_text` → `string[]`,
+ * `_uuid` → `string[]`, `_mood` → `('a' | 'b')[]`).
+ */
+function tsType(udtName, enumsByType) {
+  if (udtName.startsWith('_')) {
+    const element = baseTsType(udtName.slice(1), enumsByType);
+    return element.includes(' | ') ? `(${element})[]` : `${element}[]`;
+  }
+  return baseTsType(udtName, enumsByType);
+}
+
+/** `statuses` → `status`, `batch_boxes` → `batch_box`, `addresses` → `address`. */
+function singularize(word) {
+  if (/ss$/.test(word)) return word; // address, class, progress
+  if (/ies$/.test(word)) return `${word.slice(0, -3)}y`; // entries → entry
+  if (/(s|x|z|ch|sh)es$/.test(word)) return word.slice(0, -2); // statuses → status, boxes → box
+  if (/s$/.test(word)) return word.slice(0, -1); // tenants → tenant
+  return word;
+}
+
+/** `app_users` → `AppUser`; `tenants` → `Tenant`; `batch_boxes` → `BatchBox`. */
 function interfaceName(table) {
   const parts = table.split('_');
   const last = parts.pop();
-  const singular = /ss$/.test(last) ? last : last.replace(/s$/, '');
+  const singular = singularize(last);
   return [...parts, singular].map((p) => p[0].toUpperCase() + p.slice(1)).join('');
 }
 
 /**
- * Pulls the allowed values out of a Postgres `CHECK ((col = ANY (ARRAY['a'::text,
- * …])))` definition — how an `IN (…)` column check is stored. Returns null when
- * the constraint is not of that simple, single-column shape.
+ * Pulls the allowed values out of a Postgres `CHECK … IN (…)` definition.
+ *
+ * Postgres does not store `IN` — it renders a `= ANY (ARRAY[…])`. A `text`
+ * column renders as `CHECK ((k = ANY (ARRAY['x'::text, 'y'::text])))`, but the
+ * identical `varchar` column renders differently, with an explicit cast:
+ * `CHECK (((k)::text = ANY ((ARRAY['x'::character varying, 'y'::character
+ * varying])::text[])))`. Both shapes are recognised here; anything else (a
+ * multi-column or non-`ANY` constraint) returns null.
  */
-function checkEnumValues(columns, definition) {
+function checkEnumValues(column, definition) {
   const m = definition.match(
-    /^CHECK \(\((\w+) = ANY \(ARRAY\[(.*?)\]\)\)\)$/s,
+    /^CHECK \(\(\(?(\w+)\)?(?:::text)? = ANY \(\(?ARRAY\[/,
   );
-  if (!m || m[1] !== columns) return null;
-  return [...m[2].matchAll(/'([^']*)'::text/g)].map((x) => x[1]);
+  if (!m || m[1] !== column) return null;
+  const values = [...definition.matchAll(/'((?:[^']|'')*)'::(?:text|character varying)/g)]
+    .map((x) => x[1].replace(/''/g, "'"));
+  return values.length > 0 ? values : null;
 }
 
 const client = new pg.Client({ connectionString, application_name: 'warehouse-gen-types' });
@@ -135,6 +172,21 @@ try {
     [tableNames],
   );
 
+  // Real enum types (not CHECK … IN) → their labels, straight from pg_enum.
+  const { rows: enumRows } = await client.query(
+    `select t.typname as type_name, e.enumlabel as label
+       from pg_type t
+       join pg_enum e on e.enumtypid = t.oid
+       join pg_namespace n on n.oid = t.typnamespace
+      where n.nspname = 'public'
+      order by t.typname, e.enumsortorder`,
+  );
+  const enumsByType = new Map(); // udt_name -> string[]
+  for (const row of enumRows) {
+    if (!enumsByType.has(row.type_name)) enumsByType.set(row.type_name, []);
+    enumsByType.get(row.type_name).push(row.label);
+  }
+
   // column → union of allowed values, derived from single-column CHECK … IN.
   const enums = new Map(); // `${table}.${column}` -> string[]
   const foreignKeys = [];
@@ -150,15 +202,32 @@ try {
   const blocks = [];
   for (const table of tableNames) {
     const cols = columns.filter((c) => c.table_name === table);
-    const lines = cols.map((c) => {
+    const typeOf = (c) => {
       const enumValues = enums.get(`${table}.${c.column_name}`);
-      const type = enumValues
+      return enumValues
         ? enumValues.map((v) => `'${v}'`).join(' | ')
-        : tsType(c.udt_name);
+        : tsType(c.udt_name, enumsByType);
+    };
+
+    const rowLines = cols.map((c) => {
       const nullable = c.is_nullable === 'YES';
-      return `  ${c.column_name}: ${type}${nullable ? ' | null' : ''};`;
+      return `  ${c.column_name}: ${typeOf(c)}${nullable ? ' | null' : ''};`;
     });
-    blocks.push(`export interface ${interfaceName(table)} {\n${lines.join('\n')}\n}`);
+
+    // Insert shape: a column is optional when it is nullable or carries a
+    // database default, so an insert need not hand-`Omit` the defaulted ones.
+    const insertLines = cols.map((c) => {
+      const nullable = c.is_nullable === 'YES';
+      const hasDefault = c.column_default != null;
+      return `  ${c.column_name}${nullable || hasDefault ? '?' : ''}: ${typeOf(c)}${
+        nullable ? ' | null' : ''
+      };`;
+    });
+
+    blocks.push(
+      `export interface ${interfaceName(table)} {\n${rowLines.join('\n')}\n}`,
+      `export interface ${interfaceName(table)}Insert {\n${insertLines.join('\n')}\n}`,
+    );
   }
 
   const databaseEntries = tableNames
@@ -175,11 +244,14 @@ try {
   const output = `// AUTO-GENERATED by scripts/gen-types.mjs — do not edit by hand.
 // Regenerate with \`npm run db:types\` after any migration that changes a table.
 // The generator reads the live catalogue (information_schema.columns +
-// pg_constraint), so these types cannot drift from the database silently.
+// pg_constraint + pg_enum), so these types cannot drift from the database
+// silently.
 //
 // Nullability mirrors the schema exactly (\`| null\` for every nullable column,
 // nothing for a \`not null\` column). \`numeric\` and \`bigint\` are typed as
-// \`string\` because node-postgres returns them as strings.
+// \`string\` because node-postgres returns them as strings. Real Postgres enums
+// become string unions and array columns become typed arrays. Each table also
+// gets an \`…Insert\` shape where nullable and defaulted columns are optional.
 
 ${blocks.join('\n\n')}
 

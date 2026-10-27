@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { Pool, type PoolClient } from 'pg';
 
 /**
@@ -22,7 +24,7 @@ function resolveUrl(url?: string): string {
     url ?? process.env.DATABASE_URL ?? process.env.SQL_TEST_DATABASE_URL;
   if (!resolved) {
     throw new Error(
-      'newPool: no connection string — pass a url or set DATABASE_URL',
+      'newPool: no connection string — pass a url or set DATABASE_URL or SQL_TEST_DATABASE_URL',
     );
   }
   return resolved;
@@ -39,10 +41,32 @@ export function newPool(url?: string): Pool {
   });
 }
 
-/** Narrowing helper: is this a pool of many connections, or one connection? */
+/**
+ * Narrowing helper: is this a source that can hand out a *separately releasable*
+ * connection (a pool), or a single connection itself?
+ *
+ * Deliberately structural, not `instanceof Pool`. `instanceof` is defeated by a
+ * pool-like wrapper (a Proxy, a decorator) or by a second copy of the `pg`
+ * module, both of which would silently fall into the single-connection branch:
+ * no `connect()`, no `release()`, and `BEGIN` plus the transaction-local
+ * `set_config` landing on whichever backend each statement happens to get.
+ *
+ * A pool is recognised by a `connect` method **plus** either a `release` hook or
+ * the pool counters (`totalCount`). A bare `pg.Client` exposes `connect` but
+ * neither — and a plain `{ query }` stub exposes no `connect` at all — so both
+ * correctly take the single-connection branch.
+ */
 function isPool(source: Pool | Queryable): source is Pool {
-  return source instanceof Pool;
+  const s = source as unknown as Record<string, unknown>;
+  if (typeof s.connect !== 'function') return false;
+  return typeof s.release === 'function' || typeof s.totalCount === 'number';
 }
+
+/**
+ * Marks the dynamic extent of a {@link withTenant} call so a nested call can be
+ * refused before it issues `BEGIN`. See the contract note on `withTenant`.
+ */
+const inWithTenant = new AsyncLocalStorage<true>();
 
 /**
  * Runs `fn` on a single connection with the current tenant pinned, inside one
@@ -55,21 +79,57 @@ function isPool(source: Pool | Queryable): source is Pool {
  * connection — which is why this checks out one connection and never uses
  * bare `pool.query`.
  *
- * The connection is injected: pass a `Pool` (one is checked out and released),
- * a single `Client`, or a stub. The pool is never constructed here, so tests
- * can substitute a fake.
+ * The connection is injected: pass a pool-like source (a `Pool`, or any object
+ * with `connect`/`release` — detected *structurally*, not via `instanceof`), a
+ * single `Client`, or a stub. The pool is never constructed here, so tests can
+ * substitute a fake.
+ *
+ * **Not re-entrant.** `withTenant` is deliberately NOT re-entrant and must not
+ * be called from inside its own `fn`. Postgres does not nest `BEGIN`: a second
+ * `BEGIN` on the same connection only emits
+ * `WARNING: there is already a transaction in progress`, and the inner `COMMIT`
+ * then commits the *outer* transaction — so a later rollback silently fails to
+ * undo the "inner" work. To make that impossible rather than merely
+ * discouraged, a nested call is refused *before* `BEGIN` with the named error
+ * `withTenant: already inside a transaction`, leaving the already-open
+ * transaction untouched. A defensive
+ * `pg_current_xact_id_if_assigned()` check catches the case where the
+ * connection was handed to us already mid-transaction.
  */
 export async function withTenant<T>(
   source: Pool | Queryable,
   tenantId: string,
   fn: (db: Queryable) => Promise<T>,
 ): Promise<T> {
-  const pooled = isPool(source);
-  const db: Queryable = pooled
-    ? ((await (source as Pool).connect()) as unknown as PoolClient as Queryable)
-    : (source as Queryable);
+  if (inWithTenant.getStore()) {
+    throw new Error('withTenant: already inside a transaction');
+  }
+  return inWithTenant.run(true, () => runWithTenant(source, tenantId, fn));
+}
 
+async function runWithTenant<T>(
+  source: Pool | Queryable,
+  tenantId: string,
+  fn: (db: Queryable) => Promise<T>,
+): Promise<T> {
+  const pooled = isPool(source);
+  const client = pooled
+    ? ((await (source as Pool).connect()) as unknown as PoolClient)
+    : undefined;
+  const db: Queryable = client ?? (source as Queryable);
+
+  let failure: Error | undefined;
   try {
+    // Defensive: never issue BEGIN onto a connection that already has a
+    // transaction open. If one is open, its commit/rollback is not ours to
+    // control — refuse rather than corrupt it.
+    const { rows } = await db.query<{ xid: string | null }>(
+      'select pg_current_xact_id_if_assigned() as xid',
+    );
+    if (rows[0]?.xid != null) {
+      throw new Error('withTenant: already inside a transaction');
+    }
+
     await db.query('begin');
     try {
       await db.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
@@ -80,7 +140,12 @@ export async function withTenant<T>(
       await db.query('rollback').catch(() => {});
       throw err;
     }
+  } catch (err) {
+    failure = err instanceof Error ? err : new Error(String(err));
+    throw err;
   } finally {
-    if (pooled) (db as unknown as PoolClient).release();
+    // Pass the error on the throw path so a broken connection is destroyed
+    // rather than returned to the pool as healthy.
+    if (client) client.release(failure);
   }
 }
