@@ -12,12 +12,17 @@ import { createRequisition } from '../../src/db/requisitions.ts';
 import { getAppPool } from '../../src/db/app-pool.ts';
 import { ApiError, errorResponse } from '../../src/api/errors.ts';
 import { requireScope } from '../../src/api/auth.ts';
+import { readRoute } from '../../src/api/read.ts';
+import { encodeCursor } from '../../src/api/params.ts';
+import { onHandByLocation } from '../../src/db/usage.ts';
+import { transitLocation } from '../../src/db/locations.ts';
+import { OPTIONS as optionsOnHand } from '../../src/app/api/v1/on-hand/route.ts';
 import { GET as getOnHand, POST as postOnHand, HEAD as headOnHand } from '../../src/app/api/v1/on-hand/route.ts';
 import { GET as getItems } from '../../src/app/api/v1/items/route.ts';
 import { GET as getLocations } from '../../src/app/api/v1/locations/route.ts';
 import { GET as getRequisitions } from '../../src/app/api/v1/requisitions/route.ts';
 import { GET as getMovements } from '../../src/app/api/v1/movements/route.ts';
-import { GET as getUnknown } from '../../src/app/api/v1/[...path]/route.ts';
+import { GET as getUnknown } from '../../src/app/api/v1/[[...path]]/route.ts';
 import { migrateUrl, sqlTestUrl } from '../harness/sql.ts';
 
 /**
@@ -487,4 +492,210 @@ test('unexpected exceptions are a generic 500 with no leak', async () => {
   assert.ok(!text.includes('secret_table'));
   const known = errorResponse(new ApiError(418, 'teapot', 'short'));
   assert.equal(known.status, 418);
+});
+
+// ------------------------------------------------------------ review fixes
+
+const cursorOf = (o: Record<string, string>) => encodeCursor(o);
+const UUID0 = '00000000-0000-4000-8000-000000000000';
+
+test('forged timestamp cursors are 400 naming cursor, never 500', { skip }, async () => {
+  const bad = [
+    '2026-13-45 10:00:00+00', '2026-01-45 10:00:00+00', '2026-02-30 10:00:00+00', '2027-02-29 10:00:00+00',
+    '0000-01-05 10:00:00+00', '99999-01-05 10:00:00+00', '2026-01-05 10:00:00+99:99', '2026-01-05 10:00:00+16',
+    '2026-01-05 24:00:00+00', '2026-01-05 10:60:00+00', '2026-01-05 10:00:61+00', '2026-00-10 10:00:00+00',
+  ];
+  for (const t of bad) {
+    const res = await getRequisitions(req(`/api/v1/requisitions?cursor=${cursorOf({ t, i: UUID0 })}`, A.readTok));
+    assert.equal(res.status, 400, `ts cursor ${t}`);
+    const b = await body(res);
+    assert.equal(b.error.code, 'invalid_parameter');
+    assert.match(b.error.message, /cursor/);
+  }
+  // a leap day is real
+  const ok = await getRequisitions(req(`/api/v1/requisitions?cursor=${cursorOf({ t: '2028-02-29 10:00:00.123456+00', i: UUID0 })}`, A.readTok));
+  assert.equal(ok.status, 200);
+});
+
+test('cursor fuzz: every kind rejects impossible-but-well-formed values with 400 and accepts real ones', { skip }, async () => {
+  const cases: Array<[string, Handler, Record<string, string>, Record<string, string[]>]> = [
+    ['on-hand', getOnHand, { v: UUID0, l: UUID0 }, { v: ['zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz', UUID0 + '0', 'null'], l: ['1', UUID0.slice(1)] }],
+    ['items', getItems, { i: UUID0 }, { i: ['not-a-uuid', '', UUID0.replace(/0$/, 'g')] }],
+    ['locations', getLocations, { c: 'WH', i: UUID0 }, { c: ['', 'x'.repeat(201), 'a\u0000b'], i: ['nope'] }],
+    ['movements', getMovements, { s: '1' }, { s: ['9223372036854775808', '99999999999999999999', '-1', '1e3', '1.5', ' 1', ''] }],
+    ['requisitions', getRequisitions, { t: '2026-01-05 10:00:00+00', i: UUID0 }, { t: ['2026-13-45 10:00:00+00', '2026-02-30 10:00:00+00'], i: ['xx'] }],
+  ];
+  let checked = 0;
+  for (const [name, h, good, bads] of cases) {
+    const r0 = await h(req(`/api/v1/${name}?cursor=${cursorOf(good)}`, A.readTok));
+    assert.equal(r0.status, 200, `${name}: genuine cursor`);
+    for (const [k, vals] of Object.entries(bads)) {
+      for (const v of vals) {
+        const r = await h(req(`/api/v1/${name}?cursor=${cursorOf({ ...good, [k]: v })}`, A.readTok));
+        assert.equal(r.status, 400, `${name}.${k}=${JSON.stringify(v)}`);
+        assert.match((await body(r)).error.message, /cursor/);
+        checked++;
+      }
+    }
+  }
+  // the largest accepted bigint-shaped seq (18 digits) is a real bigint
+  const edge = await getMovements(req(`/api/v1/movements?cursor=${cursorOf({ s: '999999999999999999' })}`, A.readTok));
+  assert.equal(edge.status, 200);
+  assert.ok(checked >= 20);
+});
+
+test('requisitions: ts cursor round-trips across a tie on requested_at with no dup/gap', { skip }, async () => {
+  const T = await build('T17');
+  const pool = await getAppPool();
+  const ids: string[] = [];
+  for (let n = 0; n < 5; n++) {
+    const r = await withTenant(pool, T.tenant, (db) =>
+      createRequisition(db, { branchLocationId: T.br, requestedBy: T.user, lines: [{ variantId: T.variant, requestedQty: 1 }] }),
+    );
+    ids.push((r as any).id ?? (r as any).requisition?.id);
+  }
+  // every requisition gets the SAME requested_at (microsecond precision included)
+  await ownerDo((o) => o.query(`update requisitions set requested_at = '2026-03-04 05:06:07.123456+00' where tenant_id = $1`, [T.tenant]));
+  const seen: string[] = [];
+  let cursor = '';
+  for (let guard = 0; guard < 10; guard++) {
+    const b = await body(await getRequisitions(req(`/api/v1/requisitions?limit=2${cursor}`, T.readTok)));
+    seen.push(...b.data.map((r: any) => r.id));
+    if (!b.nextCursor) break;
+    cursor = `&cursor=${b.nextCursor}`;
+  }
+  assert.equal(seen.length, 5);
+  assert.equal(new Set(seen).size, 5, 'no duplicates');
+  assert.deepEqual([...seen].sort(), [...ids].sort(), 'no gaps');
+});
+
+test('bare /api/v1 and unknown paths are the JSON 404', { skip }, async () => {
+  for (const p of ['/api/v1', '/api/v1/', '/api/v1/nope', '/api/v1/on-hand/extra']) {
+    const res = await getUnknown(req(p, A.readTok));
+    assert.equal(res.status, 404, p);
+    assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+    const b = await body(res);
+    assert.equal(b.error.code, 'not_found');
+    assert.ok(typeof b.error.message === 'string' && b.error.message.length > 0);
+  }
+});
+
+test('an unexpected exception logs ONE scrubbed line and the client body is unchanged', { skip }, async () => {
+  const lines: string[] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void lines.push(a.map(String).join(' '));
+  try {
+    const boom = readRoute(() => {
+      const e = new Error('connect failed postgres://svc:hunter2pw@10.1.2.3:5432/warehouse (user "svc") 10.1.2.3:5432');
+      (e as any).code = 'ECONNREFUSED';
+      throw e;
+    });
+    const res = await boom.GET(req('/api/v1/on-hand?sku=SECRETSKU&cursor=abc', A.readTok));
+    assert.equal(res.status, 500);
+    assert.deepEqual(await body(res), { error: { code: 'internal', message: 'Internal server error' } });
+    assert.equal(lines.length, 1, 'logged exactly once');
+    const line = lines[0]!;
+    assert.match(line, /GET \/api\/v1\/on-hand/);
+    assert.match(line, /Error code=ECONNREFUSED/);
+    const id = res.headers.get('x-request-id');
+    assert.ok(id && line.includes(`id=${id}`), 'the response header carries the logged id');
+    for (const secret of [A.readTok, 'hunter2pw', 'postgres://', '10.1.2.3', 'SECRETSKU', 'authorization', 'Bearer']) {
+      assert.ok(!line.includes(secret), `log line must not contain ${secret === A.readTok ? 'the token' : secret}`);
+    }
+    // expected 4xx are NOT logged
+    lines.length = 0;
+    await getOnHand(req('/api/v1/on-hand?limit=0', A.readTok));
+    await getOnHand(req('/api/v1/on-hand'));
+    await getUnknown(req('/api/v1/nope'));
+    assert.equal(lines.length, 0, 'no log for 4xx');
+  } finally {
+    console.error = orig;
+  }
+});
+
+test('OPTIONS carries the standard headers', async () => {
+  const res = await optionsOnHand();
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.match(res.headers.get('allow') ?? '', /GET/);
+});
+
+test('CONTRACT: API on-hand and the stock screen agree on a messy tenant', { skip }, async () => {
+  const M = await build('M17');
+  const pool = await getAppPool();
+  await withTenant(pool, M.tenant, async (db) => {
+    const tr = await transitLocation(db);
+    const old = await createLocation(db, { code: 'OLD-M17', nameAr: 'مخزن قديم', type: 'warehouse' });
+    const mk = async (tag: string, discrete: boolean) =>
+      createItem(db, { nameAr: `صنف ${tag}`, family: 'sellable', sku: `M17-${tag}`, barcode: `M17-B${tag}`, costEgp: 10, discrete });
+    const inactiveItem = await mk('II', true);
+    const inactiveVar = await mk('IV', true);
+    const frac = await mk('FR', false);
+    const neg = await mk('NG', true);
+    const inOld = await mk('OL', true);
+    const inTransit = await mk('TR', true);
+    const put = (variantId: string, qty: number, toLocationId: string) =>
+      postMovement(db, { variantId, qty, reason: 'opening_balance', toLocationId, actorUserId: M.user });
+    await put(inactiveItem.variant.id, 4, M.wh);
+    await put(inactiveVar.variant.id, 6, M.wh);
+    await put(frac.variant.id, 2.125, M.br);
+    await put(inOld.variant.id, 9, old.id);
+    await put(inTransit.variant.id, 3, M.wh);
+    await postMovement(db, { variantId: inTransit.variant.id, qty: 3, reason: 'transfer', fromLocationId: M.wh, toLocationId: tr.id, actorUserId: M.user });
+    await postMovement(db, { variantId: neg.variant.id, qty: 3, reason: 'consumption', fromLocationId: M.br });
+    await ownerDo(async (o) => {
+      await o.query(`update items set active = false where id = $1`, [inactiveItem.item.id]);
+      await o.query(`update item_variants set active = false where id = $1`, [inactiveVar.variant.id]);
+      await o.query(`update locations set active = false where id = $1`, [old.id]);
+    });
+  });
+  const stock = await withTenant(pool, M.tenant, (db) => onHandByLocation(db, { limit: 500 }));
+  const api = await body(await getOnHand(req('/api/v1/on-hand?limit=500', M.readTok)));
+  const key = (v: string, l: string) => `${v}|${l}`;
+  const apiRows = new Map<string, string>(api.data.map((r: any) => [key(r.variantId, r.locationId), r.onHand]));
+  const locs = await ownerDo(async (o) => (await o.query(`select id, name_ar from locations where tenant_id = $1`, [M.tenant])).rows);
+  assert.ok(stock.length >= 7, `messy tenant must have real spread, got ${stock.length}`);
+  assert.ok(stock.some((r) => r.qty.startsWith('-')), 'a negative balance is present');
+  assert.ok(stock.some((r) => r.qty === '2.125'), 'a fractional quantity is present');
+  assert.equal(apiRows.size, api.data.length);
+  // the stock screen row carries the location NAME; map it back to the id to compare the SET of pairs
+  const nameToId = new Map<string, string>(locs.map((r: any) => [r.name_ar, r.id]));
+  assert.equal(nameToId.size, locs.length, 'location names are unique in the messy tenant');
+  const screenRows = new Map<string, string>(stock.map((r) => [key(r.variantId, nameToId.get(r.location)!), r.qty]));
+  assert.equal(screenRows.size, stock.length);
+  assert.deepEqual([...apiRows.keys()].sort(), [...screenRows.keys()].sort(), 'same (variant, location) set');
+  for (const [k, q] of screenRows) assert.equal(apiRows.get(k), q, `quantity for ${k}`);
+  for (const r of api.data) assert.equal(r.available, r.onHand);
+});
+
+test('last_used_at is a coarse, post-scope stamp', { skip }, async () => {
+  const S = await build('S17');
+  const stamp = () =>
+    ownerDo(async (o) => (await o.query(`select last_used_at::text as t from api_clients where id = $1`, [S.readId])).rows[0].t as string | null);
+  assert.equal(await stamp(), null);
+  assert.equal((await getOnHand(req('/api/v1/on-hand', S.readTok))).status, 200);
+  const first = await stamp();
+  assert.notEqual(first, null, 'first call stamps');
+  await getOnHand(req('/api/v1/on-hand', S.readTok));
+  assert.equal(await stamp(), first, 'a second call within 60 s does not move the stamp');
+  await ownerDo((o) => o.query(`update api_clients set last_used_at = now() - interval '61 seconds' where id = $1`, [S.readId]));
+  const old = await stamp();
+  await getOnHand(req('/api/v1/on-hand', S.readTok));
+  assert.notEqual(await stamp(), old, 'a call after 60 s stamps again');
+  // 403 must not stamp
+  assert.equal((await getOnHand(req('/api/v1/on-hand', S.writeTok))).status, 403);
+  const n403 = await ownerDo(async (o) => (await o.query(`select count(*)::int as n from api_clients where tenant_id = $1 and name like 'writer%' and last_used_at is not null`, [S.tenant])).rows[0].n);
+  assert.equal(n403, 0, '403 does not stamp');
+  // revoked never stamps
+  assert.equal((await getOnHand(req('/api/v1/on-hand', S.revokedTok))).status, 401);
+  const nRev = await ownerDo(async (o) => (await o.query(`select count(*)::int as n from api_clients where tenant_id = $1 and name like 'revoked%' and last_used_at is not null`, [S.tenant])).rows[0].n);
+  assert.equal(nRev, 0, 'revoked never stamps');
+});
+
+test('the catch-all is OPTIONAL ([[...path]]) so bare /api/v1 reaches it', async () => {
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync('src/app/api/v1/[[...path]]/route.ts'));
+  assert.ok(!existsSync('src/app/api/v1/[...path]/route.ts'));
 });

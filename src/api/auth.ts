@@ -45,7 +45,7 @@ export async function requireScope(
   scope: ApiScope,
 ): Promise<{ clientId: string; tenantId: string }> {
   const token = bearerToken(req);
-  const client = await authenticateClient(await getAppPool(), token);
+  const client = await authenticateClient(await getAppPool(), token, { scope });
   if (!client) throw unauthorized();
   if (!client.scopes.includes(scope)) {
     throw new ApiError(403, 'forbidden', `This API key does not have the "${scope}" scope`);

@@ -1,7 +1,7 @@
 import { getAppPool } from '../db/app-pool.ts';
 import { withTenant, type Queryable } from '../db/client.ts';
 import { requireScope } from './auth.ts';
-import { ApiError, errorResponse, jsonResponse } from './errors.ts';
+import { ApiError, BASE_HEADERS, errorResponse, jsonResponse } from './errors.ts';
 
 /**
  * THE ONE SHARED PATH for every read route: auth → `read` scope → ONE
@@ -28,7 +28,7 @@ export function readRoute(run: ReadRunner) {
       const body = await withTenant(pool, tenantId, (db) => run(db, url));
       return jsonResponse(body);
     } catch (e) {
-      return errorResponse(e);
+      return errorResponse(e, req);
     }
   }
   async function HEAD(req: Request): Promise<Response> {
@@ -36,7 +36,7 @@ export function readRoute(run: ReadRunner) {
     return new Response(null, { status: res.status, headers: res.headers });
   }
   async function OPTIONS(): Promise<Response> {
-    return new Response(null, { status: 204, headers: { allow: ALLOW, 'cache-control': 'no-store' } });
+    return new Response(null, { status: 204, headers: { ...BASE_HEADERS, allow: ALLOW } });
   }
   const notAllowed = async (_req?: Request): Promise<Response> =>
     errorResponse(new ApiError(405, 'method_not_allowed', 'Method not allowed', { allow: ALLOW }));

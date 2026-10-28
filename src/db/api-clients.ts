@@ -88,12 +88,15 @@ export async function issueClient(
  *
  * On a successful resolve it WRITES `last_used_at` (inside the tenant scope),
  * so an integrator's last activity is actually recorded rather than accepted and
- * forgotten. Call it OUTSIDE a `withTenant` scope — it opens its own, and
+ * forgotten. The stamp is COARSE: written only if null or older than 60 s, and
+ * (when `opts.scope` is given) only if the key holds that scope — a 403 call
+ * does not stamp. The result still carries `scopes` so the caller can refuse. Call it OUTSIDE a `withTenant` scope — it opens its own, and
  * `withTenant` is not re-entrant.
  */
 export async function authenticateClient(
   db: Queryable,
   token: string,
+  opts: { scope?: string } = {},
 ): Promise<AuthenticatedClient | null> {
   if (typeof token !== 'string' || token === '') return null;
 
@@ -108,11 +111,20 @@ export async function authenticateClient(
   const row = rows[0];
   if (!row) return null;
 
-  // Everything after resolution is ordinary, tenant-scoped work: record that the
-  // key was used, then (in the caller's hands) read and write as that tenant.
-  await withTenant(db, row.tenant_id, async (tdb) => {
-    await tdb.query(`update api_clients set last_used_at = now() where id = $1`, [row.client_id]);
-  });
+  // Record use — but only for a call that is actually ALLOWED (a key lacking the
+  // required scope is a 403 and must not stamp) and only when the last stamp is
+  // older than STAMP_INTERVAL: ONE conditional UPDATE (no read-then-write race),
+  // which takes the row lock only when it really writes.
+  if (opts.scope === undefined || row.scopes.includes(opts.scope)) {
+    await withTenant(db, row.tenant_id, async (tdb) => {
+      await tdb.query(
+        `update api_clients set last_used_at = now()
+          where id = $1
+            and (last_used_at is null or last_used_at < now() - interval '60 seconds')`,
+        [row.client_id],
+      );
+    });
+  }
 
   return { id: row.client_id, tenantId: row.tenant_id, scopes: row.scopes };
 }

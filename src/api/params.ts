@@ -76,7 +76,22 @@ export function optInstant(q: URLSearchParams, name: string): string | undefined
 
 export type CursorKind = 'uuid' | 'seq' | 'text' | 'ts';
 const SEQ = /^[0-9]{1,18}$/;
-const TS = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:?\d{2})?$/;
+const TS = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?([+-])(\d{2})(?::?(\d{2}))?$/;
+const SEQ_MAX = 9223372036854775807n;
+
+/** A real Postgres-printed timestamptz: real calendar date (year 1..9999), real clock, offset within +-15:59. */
+function isRealTimestamp(v: string): boolean {
+  const m = TS.exec(v);
+  if (!m) return false;
+  const n = (i: number): number => Number(m[i] ?? '0');
+  const [y, mo, d, h, mi, sec, oh, om] = [n(1), n(2), n(3), n(4), n(5), n(6), n(9), n(10)];
+  if (y < 1 || y > 9999) return false;
+  const probe = new Date(0);
+  probe.setUTCFullYear(y, mo - 1, d); // setUTCFullYear: no two-digit-year remapping
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) return false;
+  if (h > 23 || mi > 59 || sec > 59) return false;
+  return oh <= 15 && om <= 59;
+}
 
 /** Opaque cursor: base64url of a JSON object. Clients must treat it as an opaque string. */
 export function encodeCursor(o: Record<string, string>): string {
@@ -108,8 +123,8 @@ export function parseCursor<K extends string>(
     if (typeof val !== 'string') throw bad();
     const kind = spec[k];
     if (kind === 'uuid' && !UUID.test(val)) throw bad();
-    if (kind === 'seq' && !SEQ.test(val)) throw bad();
-    if (kind === 'ts' && !TS.test(val)) throw bad();
+    if (kind === 'seq' && (!SEQ.test(val) || BigInt(val) > SEQ_MAX)) throw bad();
+    if (kind === 'ts' && !isRealTimestamp(val)) throw bad();
     if (kind === 'text' && (val === '' || val.length > 200 || val.includes('\u0000'))) throw bad();
     out[k] = val;
   }
