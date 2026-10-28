@@ -32,6 +32,48 @@ export interface AppUserInsert {
   created_at?: Date;
 }
 
+export interface CountLine {
+  id: string;
+  tenant_id: string;
+  count_session_id: string;
+  variant_id: string;
+  expected_qty: string;
+  counted_qty: string | null;
+  variance_qty: string | null;
+}
+
+export interface CountLineInsert {
+  id?: string;
+  tenant_id: string;
+  count_session_id: string;
+  variant_id: string;
+  expected_qty: string;
+  counted_qty?: string | null;
+  variance_qty?: string | null;
+}
+
+export interface CountSession {
+  id: string;
+  tenant_id: string;
+  location_id: string;
+  status: 'open' | 'closed';
+  started_by: string | null;
+  started_at: Date;
+  closed_by: string | null;
+  closed_at: Date | null;
+}
+
+export interface CountSessionInsert {
+  id?: string;
+  tenant_id: string;
+  location_id: string;
+  status?: 'open' | 'closed';
+  started_by?: string | null;
+  started_at?: Date;
+  closed_by?: string | null;
+  closed_at?: Date | null;
+}
+
 export interface ItemVariant {
   id: string;
   tenant_id: string;
@@ -305,6 +347,8 @@ export interface TenantInsert {
 /** Maps a table name to its row shape. */
 export interface Database {
   app_users: AppUser;
+  count_lines: CountLine;
+  count_sessions: CountSession;
   item_variants: ItemVariant;
   items: Item;
   location_levels: LocationLevel;
@@ -322,12 +366,19 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
   { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'count_lines', columns: 'tenant_id,count_session_id', definition: "FOREIGN KEY (tenant_id, count_session_id) REFERENCES count_sessions(tenant_id, id) ON DELETE CASCADE" },
+  { table: 'count_lines', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'count_lines', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
+  { table: 'count_sessions', columns: 'tenant_id,closed_by', definition: "FOREIGN KEY (tenant_id, closed_by) REFERENCES app_users(tenant_id, id)" },
+  { table: 'count_sessions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'count_sessions', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'count_sessions', columns: 'tenant_id,started_by', definition: "FOREIGN KEY (tenant_id, started_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'item_variants', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'item_variants', columns: 'tenant_id,item_id', definition: "FOREIGN KEY (tenant_id, item_id) REFERENCES items(tenant_id, id) ON DELETE RESTRICT" },
   { table: 'items', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
