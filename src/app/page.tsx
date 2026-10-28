@@ -1,8 +1,10 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { loadCurrentUser } from '../auth/current-user';
-import { SIGN_IN_PATH } from './sign-in/contract';
+import { navLinksForRole } from '../domain/home-nav';
 import { t } from '../i18n';
+import { SIGN_IN_PATH } from './sign-in/contract';
 
 /**
  * The home page — the post-sign-in landing, and THE GATE.
@@ -24,8 +26,10 @@ import { t } from '../i18n';
  * Reading the cookie makes this page DYNAMIC (it can no longer be prerendered),
  * which is the point: a static `/` is a page that cannot tell who is asking.
  *
- * Content is still deliberately minimal — Tasks 12-16 add the real,
- * role-aware screens.
+ * The links are role-aware (`navLinksForRole`): the warehouse side sees intake
+ * and the reports, a branch sees exactly the screens it participates in. A home
+ * page with no way onwards is a dead end that reads as a blank page after
+ * sign-in, so the landing page always carries the way in.
  */
 export default async function HomePage() {
   const user = await loadCurrentUser();
@@ -38,6 +42,15 @@ export default async function HomePage() {
       {/* The DISPLAY NAME, never the username: the person sees the name they
           were hired under, while the account behind it is the username. */}
       <p>{t('home.signed_in_as', { params: { name: user.displayName } })}</p>
+      <nav>
+        <ul>
+          {navLinksForRole(user.role).map((l) => (
+            <li key={l.href}>
+              <Link href={l.href}>{t(l.key)}</Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
       <a href="/sign-out">{t('home.sign_out')}</a>
     </main>
   );
