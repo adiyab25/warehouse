@@ -519,9 +519,17 @@ const REVIEW_CASES: Readonly<Record<string, string>> = {
   WASHER: 'WWW WASHER WWW WASHER WWW',
   arabic: 'صندوق شحن شاش صيني',
   mixed: 'MWMسش صضMWM',
+  // THE DEFECT: a name of nothing but ط / ظ, whose widest connected run (0.859
+  // em) sat above the old 0.75 floor with no table entry — the estimate accepted
+  // 16xط in full and Chromium drew it off the 46 mm band. The per-code-point
+  // maximum now truncates it, and the shown run renders inside the band.
+  taa16: 'ط'.repeat(16),
+  dhaa16: 'ظ'.repeat(16),
+  seen16: 'س'.repeat(16),
+  fullwidth: '１'.repeat(8),
 };
 
-test('REVIEW: the four Latin worst cases and two Arabic names all render inside 46 mm', () => {
+test('REVIEW: the Latin worst cases, the Arabic names and the ط/ظ/fullwidth defect cases render inside 46 mm', () => {
   for (const [name, full] of Object.entries(REVIEW_CASES)) {
     const baked = FUZZ_CASES[name]!;
     const shown = truncateToWidth(full, FUZZ_BAND_INNER_MM, { fontSizeMm: FUZZ_FONT_MM });

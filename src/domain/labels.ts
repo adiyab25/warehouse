@@ -119,9 +119,11 @@ const BWIP_UNITS_PER_MODULE = 2;
 /**
  * Per-character width as a fraction of the font size (`em`), by script class —
  * the FALLBACK for a code point whose own width was not measured. Every
- * constant here is at or ABOVE the widest measurement of its class, because the
- * estimate must be conservative (rule (5)): a run this function accepts must
- * not overflow when a browser finally measures it.
+ * constant here is at or ABOVE the widest measurement of the code points it
+ * still serves — any code point measurably wider than its class floor is baked
+ * in {@link MEASURED_EM} instead — because the estimate must be conservative
+ * (rule (5)): a run this function accepts must not overflow when a browser
+ * finally measures it.
  *
  * MEASURED ACROSS THE WHOLE CHARACTER SET, NOT PER LETTER. The widths were
  * taken with Chromium's `getComputedTextLength` / canvas `measureText` at
@@ -138,29 +140,39 @@ const BWIP_UNITS_PER_MODULE = 2;
  * now lives in {@link MEASURED_EM}, so nothing measured is under-read and the
  * per-class constants below only ever serve a code point that was NOT measured.
  *
- * THE FOUR WIDEST ARABIC LETTERS ARE MEASURED AS WIDEST FORMS, NOT AVERAGED.
- * Connected Arabic has no single glyph width, so a per-run average is right for
- * a mixed name — but the four letters `س ش ص ض` are wide EVEN WHEN CONNECTED.
- * Measured in the label's font stack, /100px: an isolated `س`/`ش` is 1.402 em
- * and an isolated `ص`/`ض` is 1.421 em; a fully connected run `سشصض` still
- * averages 1.178 em per character. Averaging them into the 0.647 em alphabet
- * figure under-read a name built from them by more than a factor of two — such
- * a name rendered ~15 mm off a 46 mm band, i.e. CLIPPED. They therefore take
- * their own constant, {@link GLYPH_EM.arabicWide}: 1.45 em, the widest measured
- * form (1.421 em) rounded up with ~2% of head-room. Every other Arabic letter
- * keeps the alphabet AVERAGE (0.75 em), which is what a real (mixed, CONNECTED)
- * name resembles; the widest measured connected run of any other letter
- * (`ج/ح/خ`) averages 0.754 em, inside the 0.97 truncation head-room.
+ * EVERY ARABIC CODE POINT IS MEASURED IN ITS WIDEST FORM — NOTHING IS AVERAGED
+ * AND LEFT UNMEASURED. The earlier rounds measured only the letters someone had
+ * flagged, so each round the tail simply moved to the next unmeasured letter.
+ * `س ش ص ض` (U+0633-U+0636) are wide even when connected — isolated `س`/`ش`
+ * measures 1.402 em and `ص`/`ض` 1.421 em — but so are `ط`/`ظ` (U+0637/U+0638),
+ * whose widest connected run measures 0.859 em (isolated 0.835 em), ABOVE the
+ * 0.75 alphabet floor, and so does almost the whole alphabet isolated (`ب/ت/ث`
+ * 0.928 em, `ف` 1.023, `ق` 0.988, `ي` 0.972). An averaged class constant
+ * therefore cannot bound a name built from one repeated letter: an averaged
+ * estimate let a 16x`ط` name render 50.113 mm across a 46 mm band, left edge
+ * -2.11 mm — CLIPPED off the sticker. So EVERY code point in the swept Arabic
+ * ranges (U+0600-U+06FF, U+0750-U+077F, U+08A0-U+08FF, the presentation forms)
+ * was measured ISOLATED and in homogeneous CONNECTED runs of every length 1..20,
+ * and the per-code-point MAXIMUM across forms and across the resolving font
+ * stack is baked into {@link MEASURED_EM} whenever it exceeds that code point's
+ * class floor below. Only `س ش ص ض` still take a class constant, {@link
+ * GLYPH_EM.arabicWide} 1.45 em, because their widest form (1.421 em) sits under
+ * it. The previous comment's claim that the widest connected run of `ج/ح/خ`
+ * averaged 0.754 em was measurably WRONG — they measure 0.771 em — and is gone;
+ * that unmeasured tail is exactly how this defect survived three rounds.
  *
- * OVER-ESTIMATION IS DELIBERATE. `arabic` deliberately stays a connected-run
- * AVERAGE rather than each letter's (much wider) isolated width: a lone letter
- * can never fill a 46 mm band, only a long connected run can, so the average is
- * conservative where it matters and ordinary Arabic is estimated ~20-30% early.
- * That is the SAFE direction — a name cut short is readable; a name clipped off
- * the label is not — and the constants are NOT relaxed to win characters back.
+ * OVER-ESTIMATION IS DELIBERATE. A lone Arabic letter can be ~0.9 em wide
+ * ISOLATED while a long CONNECTED run of ordinary letters averages ~0.55 em, so
+ * taking each letter's widest form over-reads ordinary Arabic heavily. That is
+ * the SAFE direction — a name cut short is readable; a name clipped off the
+ * label is not — and the constants are NOT relaxed to win characters back.
  */
 export const GLYPH_EM = {
-  /** Arabic letters (both names are Arabic) in their connected-run average. */
+  /**
+   * Arabic code points — the floor for one whose widest measured form (see
+   * {@link MEASURED_EM}) is NOT wider than 0.75 em. Every Arabic code point
+   * wider than this carries its own number in the table.
+   */
   arabic: 0.75,
   /**
    * The four widest Arabic letters — `س` (U+0633), `ش` (U+0634), `ص` (U+0635),
@@ -197,22 +209,36 @@ export const GLYPH_EM = {
  * code point, as a fraction of the font size (`em`).
  *
  * Every value is the MAXIMUM Chromium reported for that code point across the
- * label's resolving font stack at weights 400 and 700 (see the {@link GLYPH_EM}
- * note), rounded UP to three decimals. The whole printable-ASCII range, the
- * digits, the punctuation the label prints (`· - : …`), the Arabic base block
- * and its supplements, and the Arabic presentation forms were all measured; only
- * the code points below came out wider than the fallback, so only they need an
- * entry — the fallbacks already cover everything else. Raw maxima, /100 px:
+ * label's resolving font stack (Tahoma, Segoe UI, Arial — `Noto Naskh Arabic`
+ * and `Amiri` do not resolve on the measurement box, so the stack falls through
+ * to Tahoma for Arabic) at weights 400 and 700, over the forms described in
+ * {@link GLYPH_EM}: the ISOLATED glyph and homogeneous CONNECTED runs of every
+ * length 1..20, divided by the run length. The whole printable-ASCII range, the
+ * digits, the punctuation the label prints, the Arabic base / supplement /
+ * extended-A blocks, the Arabic presentation forms, and the fullwidth forms
+ * (U+FF00-U+FFEF) were all swept; only the code points below came out wider than
+ * their fallback, so only they need an entry — the fallbacks already cover
+ * everything else. 315 code points, by class: 23 ASCII, 175 Arabic + supplement
+ * + extended-A, 1 presentation form, 116 fullwidth.
  *
- *   `W` 102.783 · `M` 95.703 · `N` 79.004 · `G/H/K/O/Q` 77.783 · `D` 75.732
- *   `m` 95.361 · `w` 88.965 · `%` 119.873 · `@` 101.514 · `&` 84.961
- *   `# + < = > ^ ~` 81.836 · `×` (U+00D7) 81.836 · `—` (U+2014) 100.0
- *   (nearest value left on the class floor: `B/V/X/Y` 72.217 · `h/n/u` 64.014 · digits 63.672)
+ * THE ARABIC SPRAY IS THE WHOLE POINT. Earlier rounds measured only the letters
+ * someone had already flagged, so the tail moved to the next unmeasured letter
+ * each round. Raw maxima, /100 px (isolated · widest connected run per char):
+ *
+ *   `ط`/`ظ` (U+0637/U+0638) 83.496 · 85.933 — ABOVE the 0.75 floor
+ *   `س`/`ش` 140.186 · 117.560 · `ص`/`ض` 142.090 · 104.370 (held by 1.45)
+ *   `ب/ت/ث` 92.822, `ي` 97.217, `ف` 102.295, `ق` 98.779, `ك` 85.400
+ *   `ج/ح/خ` (U+062C-U+062E) 69.580 · 77.051 — the old comment's "0.754 em"
+ *     was measurably wrong; they measure 0.771 em
+ *   supplement U+0750 block 92.822 · 68.481 · ext-A U+08A0 block 92.822
+ *   every fullwidth form (U+FF11 and the rest) 100.000 · 100.000 (flat 1.0 em)
+ *   ASCII: `W` 102.783 · `M` 95.703 · `%` 119.873 · `@` 101.514 · `&` 84.961
  *
  * `U+FDFD` is the one Arabic presentation-form glyph wider than {@link
  * GLYPH_EM.arabicPresentation}; it is a single glyph for a whole phrase.
  */
 export const MEASURED_EM: Readonly<Record<number, number>> = {
+  // --- ASCII, digits' punctuation the label prints -------------------------
   0x23: 0.819, // '#'
   0x25: 1.199, // '%'
   0x26: 0.85, // '&'
@@ -221,12 +247,12 @@ export const MEASURED_EM: Readonly<Record<number, number>> = {
   0x3d: 0.819, // '='
   0x3e: 0.819, // '>'
   0x40: 1.016, // '@'
-  0x44: 0.757, // 'D'
+  0x44: 0.758, // 'D'
   0x47: 0.778, // 'G'
   0x48: 0.778, // 'H'
   0x4b: 0.778, // 'K'
   0x4d: 0.958, // 'M'
-  0x4e: 0.79, // 'N'
+  0x4e: 0.791, // 'N'
   0x4f: 0.778, // 'O'
   0x51: 0.778, // 'Q'
   0x57: 1.028, // 'W'
@@ -236,7 +262,301 @@ export const MEASURED_EM: Readonly<Record<number, number>> = {
   0x7e: 0.819, // '~'
   0xd7: 0.819, // '×'
   0x2014: 1.0, // '—'
-  0xfdfd: 6.881, // the Bismillah ligature
+  // --- ARABIC (U+0600-U+06FF base, +supplement +ext-A), widest form --------
+  0x600: 1.27,
+  0x601: 1.594,
+  0x603: 1.598,
+  0x604: 1.672,
+  0x608: 1.071,
+  0x609: 0.781,
+  0x60a: 0.978,
+  0x60b: 1.023,
+  0x60e: 1.239,
+  0x620: 0.973,
+  0x626: 0.973,
+  0x628: 0.929, // ب
+  0x62a: 0.929, // ت
+  0x62b: 0.929, // ث
+  0x62c: 0.771, // ج
+  0x62d: 0.771, // ح
+  0x62e: 0.771, // خ
+  0x637: 0.86, // ط
+  0x638: 0.86, // ظ
+  0x63b: 1.015,
+  0x63c: 1.015,
+  0x63d: 0.973,
+  0x63e: 0.973,
+  0x63f: 0.973,
+  0x641: 1.023, // ف
+  0x642: 0.988, // ق
+  0x643: 0.855, // ك
+  0x644: 0.771, // ل
+  0x646: 0.777, // ن
+  0x649: 0.973, // ى
+  0x64a: 0.973, // ي
+  0x66e: 0.929,
+  0x66f: 0.988,
+  0x678: 0.973,
+  0x679: 0.929,
+  0x67a: 0.929,
+  0x67b: 0.929,
+  0x67c: 0.929,
+  0x67d: 0.929,
+  0x67e: 0.929,
+  0x67f: 0.929,
+  0x680: 0.929,
+  0x681: 0.771,
+  0x682: 0.771,
+  0x683: 0.771,
+  0x684: 0.771,
+  0x685: 0.771,
+  0x686: 0.771,
+  0x687: 0.771,
+  0x69a: 1.402,
+  0x69b: 1.402,
+  0x69c: 1.402,
+  0x69d: 1.421,
+  0x69e: 1.421,
+  0x69f: 0.837,
+  0x6a1: 1.023,
+  0x6a2: 1.023,
+  0x6a3: 1.023,
+  0x6a4: 1.023,
+  0x6a5: 1.023,
+  0x6a6: 1.023,
+  0x6a7: 0.988,
+  0x6a8: 0.988,
+  0x6a9: 1.015,
+  0x6aa: 1.242,
+  0x6ab: 1.015,
+  0x6ac: 0.855,
+  0x6ad: 0.855,
+  0x6ae: 0.855,
+  0x6af: 1.015,
+  0x6b0: 1.015,
+  0x6b1: 1.015,
+  0x6b2: 1.015,
+  0x6b3: 1.015,
+  0x6b4: 1.015,
+  0x6b5: 0.771,
+  0x6b6: 0.771,
+  0x6b7: 0.771,
+  0x6b8: 0.771,
+  0x6b9: 0.777,
+  0x6ba: 0.777,
+  0x6bb: 0.777,
+  0x6bc: 0.777,
+  0x6bd: 0.777,
+  0x6be: 0.778,
+  0x6bf: 0.771,
+  0x6cc: 0.973,
+  0x6cd: 0.973,
+  0x6ce: 0.973,
+  0x6d0: 0.973,
+  0x6d1: 0.973,
+  0x6d2: 0.919,
+  0x6d3: 0.919,
+  0x6dd: 1.124,
+  0x6de: 1.085,
+  0x6fa: 1.402,
+  0x6fb: 1.421,
+  0x6ff: 0.778,
+  0x750: 0.929, // ص supplement block
+  0x751: 0.929,
+  0x752: 0.929,
+  0x753: 0.929,
+  0x754: 0.929,
+  0x755: 0.929,
+  0x756: 0.929,
+  0x757: 0.771,
+  0x758: 0.771,
+  0x75c: 1.402,
+  0x760: 1.023,
+  0x761: 1.023,
+  0x762: 1.015,
+  0x763: 1.015,
+  0x764: 1.015,
+  0x767: 0.777,
+  0x768: 0.777,
+  0x769: 0.777,
+  0x76a: 0.771,
+  0x76d: 1.402,
+  0x76e: 0.771,
+  0x76f: 0.771,
+  0x770: 1.402,
+  0x772: 0.771,
+  0x775: 0.973,
+  0x776: 0.973,
+  0x777: 0.973,
+  0x77a: 0.919,
+  0x77b: 0.919,
+  0x77c: 0.771,
+  0x77d: 1.402,
+  0x77e: 1.402,
+  0x77f: 0.855,
+  0x8a0: 0.929, // ext-A block
+  0x8a1: 0.929,
+  0x8a2: 0.771,
+  0x8a3: 0.86,
+  0x8a4: 1.023,
+  0x8a5: 0.988,
+  0x8a6: 0.771,
+  0x8a8: 0.973,
+  0x8a9: 0.973,
+  0x8ac: 0.809,
+  0x8af: 1.421,
+  0x8b0: 1.015,
+  0x8b4: 0.855,
+  0x8b5: 1.0,
+  0x8b6: 0.929,
+  0x8b7: 0.929,
+  0x8b8: 0.929,
+  0x8ba: 0.973,
+  0x8bb: 1.023,
+  0x8bc: 0.988,
+  0x8bd: 0.777,
+  0x8be: 1.0,
+  0x8bf: 1.0,
+  0x8c0: 1.0,
+  0x8c1: 1.0,
+  0x8c2: 1.0,
+  0x8c3: 1.0,
+  0x8c4: 1.0,
+  0x8c5: 1.0,
+  0x8c6: 1.0,
+  0x8c7: 1.0,
+  0x8c8: 1.0,
+  0x8c9: 1.0,
+  0x8ca: 1.0,
+  0x8cb: 1.0,
+  0x8cc: 1.0,
+  0x8cd: 1.0,
+  0x8ce: 1.0,
+  0x8cf: 1.0,
+  0x8d0: 1.0,
+  0x8d1: 1.0,
+  0x8d2: 1.0,
+  0x8d3: 1.0,
+  0x8e2: 0.844,
+  // --- PRESENTATION FORMS --------------------------------------------------
+  0xfdfd: 6.882, // the Bismillah ligature
+  // --- FULLWIDTH FORMS (U+FF00-U+FFEF), all a flat 1.0 em -------------------
+  0xff00: 1.0,
+  0xff01: 1.0,
+  0xff02: 1.0,
+  0xff03: 1.0,
+  0xff04: 1.0,
+  0xff05: 1.0,
+  0xff06: 1.0,
+  0xff07: 1.0,
+  0xff08: 1.0,
+  0xff09: 1.0,
+  0xff0a: 1.0,
+  0xff0b: 1.0,
+  0xff0c: 1.0,
+  0xff0d: 1.0,
+  0xff0e: 1.0,
+  0xff0f: 1.0,
+  0xff10: 1.0,
+  0xff11: 1.0,
+  0xff12: 1.0,
+  0xff13: 1.0,
+  0xff14: 1.0,
+  0xff15: 1.0,
+  0xff16: 1.0,
+  0xff17: 1.0,
+  0xff18: 1.0,
+  0xff19: 1.0,
+  0xff1a: 1.0,
+  0xff1b: 1.0,
+  0xff1c: 1.0,
+  0xff1d: 1.0,
+  0xff1e: 1.0,
+  0xff1f: 1.0,
+  0xff20: 1.0,
+  0xff21: 1.0,
+  0xff22: 1.0,
+  0xff23: 1.0,
+  0xff24: 1.0,
+  0xff25: 1.0,
+  0xff26: 1.0,
+  0xff27: 1.0,
+  0xff28: 1.0,
+  0xff29: 1.0,
+  0xff2a: 1.0,
+  0xff2b: 1.0,
+  0xff2c: 1.0,
+  0xff2d: 1.0,
+  0xff2e: 1.0,
+  0xff2f: 1.0,
+  0xff30: 1.0,
+  0xff31: 1.0,
+  0xff32: 1.0,
+  0xff33: 1.0,
+  0xff34: 1.0,
+  0xff35: 1.0,
+  0xff36: 1.0,
+  0xff37: 1.0,
+  0xff38: 1.0,
+  0xff39: 1.0,
+  0xff3a: 1.0,
+  0xff3b: 1.0,
+  0xff3c: 1.0,
+  0xff3d: 1.0,
+  0xff3e: 1.0,
+  0xff3f: 1.0,
+  0xff40: 1.0,
+  0xff41: 1.0,
+  0xff42: 1.0,
+  0xff43: 1.0,
+  0xff44: 1.0,
+  0xff45: 1.0,
+  0xff46: 1.0,
+  0xff47: 1.0,
+  0xff48: 1.0,
+  0xff49: 1.0,
+  0xff4a: 1.0,
+  0xff4b: 1.0,
+  0xff4c: 1.0,
+  0xff4d: 1.0,
+  0xff4e: 1.0,
+  0xff4f: 1.0,
+  0xff50: 1.0,
+  0xff51: 1.0,
+  0xff52: 1.0,
+  0xff53: 1.0,
+  0xff54: 1.0,
+  0xff55: 1.0,
+  0xff56: 1.0,
+  0xff57: 1.0,
+  0xff58: 1.0,
+  0xff59: 1.0,
+  0xff5a: 1.0,
+  0xff5b: 1.0,
+  0xff5c: 1.0,
+  0xff5d: 1.0,
+  0xff5e: 1.0,
+  0xffbf: 1.0,
+  0xffc0: 1.0,
+  0xffc1: 1.0,
+  0xffc8: 1.0,
+  0xffc9: 1.0,
+  0xffd0: 1.0,
+  0xffd1: 1.0,
+  0xffd8: 1.0,
+  0xffd9: 1.0,
+  0xffdd: 1.0,
+  0xffde: 1.0,
+  0xffdf: 1.0,
+  0xffe0: 1.0,
+  0xffe1: 1.0,
+  0xffe2: 1.0,
+  0xffe3: 1.0,
+  0xffe4: 1.0,
+  0xffe5: 1.0,
+  0xffe6: 1.0,
+  0xffe7: 1.0,
+  0xffef: 1.0,
 };
 
 /**
