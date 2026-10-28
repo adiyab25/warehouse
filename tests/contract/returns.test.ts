@@ -142,7 +142,7 @@ async function onHandBy(db: AnyDb, variantId: string): Promise<Record<string, st
 }
 
 test('a branch return moves stock back into the warehouse', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'STOCK'));
@@ -158,6 +158,7 @@ test('a branch return moves stock back into the warehouse', { skip: !sqlTestUrl(
         refType: 'customer_return',
         refId,
         idempotencyKey: randomUUID(),
+        actorUserId: u1,
       }),
     );
 
@@ -175,8 +176,9 @@ test('a branch return moves stock back into the warehouse', { skip: !sqlTestUrl(
         ref_type: string | null;
         ref_id: string | null;
         idempotency_key: string | null;
+        actor_user_id: string | null;
       }>(
-        'select from_location_id, to_location_id, reason, ref_type, ref_id, idempotency_key from stock_movements where variant_id = $1 and ref_type = $2',
+        'select from_location_id, to_location_id, reason, ref_type, ref_id, idempotency_key, actor_user_id from stock_movements where variant_id = $1 and ref_type = $2',
         [ctx.variantId, 'CUSTOMER_RETURN'],
       );
       assert.equal(mv.length, 1, 'the return is exactly one ledger row');
@@ -185,12 +187,17 @@ test('a branch return moves stock back into the warehouse', { skip: !sqlTestUrl(
       assert.equal(mv[0]?.reason, 'return_from_branch', 'a restock of sellable goods is a branch return');
       assert.equal(mv[0]?.ref_type, 'CUSTOMER_RETURN', 'the ref_type is normalised to upper case');
       assert.equal(mv[0]?.ref_id, refId, 'the movement points back at the return reference');
+      assert.equal(
+        mv[0]?.actor_user_id,
+        u1,
+        'the REQUIRED actor is written to the ledger — a return names WHO decided it',
+      );
     });
   });
 });
 
 test('a damaged return goes to the scrap location as a write-off', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'SCRAP'));
@@ -205,6 +212,7 @@ test('a damaged return goes to the scrap location as a write-off', { skip: !sqlT
         refType: 'damaged',
         refId: randomUUID(),
         idempotencyKey: randomUUID(),
+        actorUserId: u1,
       }),
     );
 
@@ -226,7 +234,7 @@ test('a damaged return goes to the scrap location as a write-off', { skip: !sqlT
 });
 
 test('a quarantined return is NOT back in sellable stock', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'QUAR'));
@@ -241,6 +249,7 @@ test('a quarantined return is NOT back in sellable stock', { skip: !sqlTestUrl()
         refType: 'suspect',
         refId: randomUUID(),
         idempotencyKey: randomUUID(),
+        actorUserId: u1,
       }),
     );
 
@@ -259,7 +268,7 @@ test('a quarantined return is NOT back in sellable stock', { skip: !sqlTestUrl()
 });
 
 test('a restock of sellable goods is visible again in on_hand', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'SELL'));
@@ -274,6 +283,7 @@ test('a restock of sellable goods is visible again in on_hand', { skip: !sqlTest
         refType: 'customer_return',
         refId: randomUUID(),
         idempotencyKey: randomUUID(),
+        actorUserId: u1,
       }),
     );
 
@@ -437,7 +447,7 @@ test('a requisition return is bounded by what the document delivered', { skip: !
 // both succeed and the branch ends at -10; with it, exactly one succeeds and the
 // branch ends at 0, never negative.
 test('concurrent returns cannot drive the source negative', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'RACE'));
@@ -461,6 +471,7 @@ test('concurrent returns cannot drive the source negative', { skip: !sqlTestUrl(
         fromLocationId: ctx.branch.id,
         disposition: 'restock' as const,
         idempotencyKey: key,
+        actorUserId: u1,
       });
 
       // Commit (or roll back a refused attempt) as soon as each settles, so
@@ -503,7 +514,7 @@ test('concurrent returns cannot drive the source negative', { skip: !sqlTestUrl(
 // fallback: a key guessed from the disposition, variant and source cannot tell
 // the two apart and would silently swallow the second.
 test('two returns with different keys both post, and the same key posts once', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'IDEM'));
@@ -517,6 +528,7 @@ test('two returns with different keys both post, and the same key posts once', {
       disposition: 'restock' as const,
       refType: 'customer_return',
       refId,
+      actorUserId: u1,
     };
 
     // The SAME key twice: one return intent, retried. It must collapse onto the
@@ -558,7 +570,7 @@ test('two returns with different keys both post, and the same key posts once', {
 
 // The key is mandatory: there is no derived fallback to hide a missing one.
 test('a return with no idempotency key is refused', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'NOKEY'));
@@ -573,6 +585,7 @@ test('a return with no idempotency key is refused', { skip: !sqlTestUrl() }, asy
             fromLocationId: ctx.branch.id,
             disposition: 'restock',
             idempotencyKey: '',
+            actorUserId: u1,
           }),
         ),
       /idempotencyKey must be a non-empty string/,
@@ -594,7 +607,7 @@ test('a return with no idempotency key is refused', { skip: !sqlTestUrl() }, asy
 // NOTHING is committed — the refused return rolls back with the caller's
 // transaction, leaving the branch's on-hand untouched and no movement behind.
 test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() }, async () => {
-  const { t1 } = await provision();
+  const { t1, u1 } = await provision();
 
   await withDb(async (db) => {
     const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'OVERQ'));
@@ -611,6 +624,7 @@ test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() 
             refType: 'customer_return',
             refId: randomUUID(),
             idempotencyKey: randomUUID(),
+            actorUserId: u1,
           }),
         ),
       /only 2\.000 is on hand/,
@@ -629,6 +643,7 @@ test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() 
             refType: 'customer_return',
             refId: randomUUID(),
             idempotencyKey: randomUUID(),
+            actorUserId: u1,
           }),
         ),
       /BR-OVERQ/,
@@ -645,6 +660,55 @@ test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() 
         [ctx.variantId, 'CUSTOMER_RETURN'],
       );
       assert.equal(rows[0]!.n, 0, 'no movement may be written when the return is refused');
+    });
+  });
+});
+
+// The actor is REQUIRED on the input, so a caller that forgets it is a TYPE
+// ERROR. This proves the RUN-TIME gate as well, so an untyped/JS caller or a
+// cast cannot slip an anonymous return onto the ledger — "who took what" must
+// hold for returns, which are decisions a person makes.
+test('a return cannot omit its actor', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'NOACTOR'));
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.branch.id, 2));
+
+    const base = {
+      variantId: ctx.variantId,
+      qty: 1,
+      fromLocationId: ctx.branch.id,
+      disposition: 'restock' as const,
+      idempotencyKey: randomUUID(),
+    };
+
+    // OMITTED — only reachable past the compiler by a cast (or from JS).
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          postReturn(tdb, base as unknown as Parameters<typeof postReturn>[1]),
+        ),
+      /actorUserId must be a non-empty user id/,
+      'a return with no actor is refused',
+    );
+
+    // EMPTY — present but not a real user id, refused the same way.
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          postReturn(tdb, { ...base, actorUserId: '   ' }),
+        ),
+      /actorUserId must be a non-empty user id/,
+      'a blank actor is refused',
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        'select count(*)::int as n from stock_movements where variant_id = $1',
+        [ctx.variantId],
+      );
+      assert.equal(rows[0]!.n, 1, 'only the seed movement exists — no anonymous return was written');
     });
   });
 });

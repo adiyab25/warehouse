@@ -37,6 +37,9 @@ export function StockUsageScreen({ from, to, rows, totalEgp, truncated }: StockU
     <div className="stock-usage">
       <p className="stock-usage-note">{t('stock.usage.subtitle')}</p>
       <p className="stock-usage-note">{t('stock.usage.cost_note')}</p>
+      {/* Goods still in flight are NOT part of the branch total — stated on the
+          screen so an owner reading the money figure knows what it excludes. */}
+      <p className="stock-usage-note">{t('stock.usage.transit_note')}</p>
 
       {/* The window is a GET form, so it is server-side, shareable, and works
           with no JavaScript. The dates are machine values, so they stay

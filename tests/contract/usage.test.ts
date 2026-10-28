@@ -8,6 +8,7 @@ import { withTenant } from '../../src/db/client.ts';
 import { createItem } from '../../src/db/items.ts';
 import { createLocation } from '../../src/db/locations.ts';
 import { postMovement } from '../../src/db/movements.ts';
+import { approve, confirmReceipt, createRequisition, issue } from '../../src/db/requisitions.ts';
 import {
   MOVEMENT_HISTORY_LIMIT,
   movementHistoryDetailed,
@@ -140,6 +141,8 @@ after(async () => {
   await owner.connect();
   try {
     await owner.query('set session_replication_role = replica');
+    await owner.query('delete from requisition_lines where tenant_id = any($1)', [provisioned]);
+    await owner.query('delete from requisitions where tenant_id = any($1)', [provisioned]);
     await owner.query('delete from stock_movements where tenant_id = any($1)', [provisioned]);
     await owner.query('set session_replication_role = origin');
     await owner.query('delete from location_levels where tenant_id = any($1)', [provisioned]);
@@ -624,6 +627,139 @@ test('the accounts view sums value in SQL, filters by window, and refuses a bran
         assert.equal(defaulted.from, monthWindow().from, 'an omitted window defaults to this month');
         assert.equal(defaulted.to, monthWindow().to);
       }
+    });
+  });
+});
+
+// MONEY CORRECTNESS — GOODS IN TRANSIT MUST BE COUNTED EXACTLY ONCE.
+//
+// Goods reach a branch in TWO ledger legs, BOTH with reason `issue_to_branch`:
+// the issue leg (warehouse -> TRANSIT) and the branch's confirm (TRANSIT ->
+// branch). A reader that grouped by DESTINATION attributed the SAME units to a
+// `transit` row AND to the branch row, so the report's money total was inflated
+// by everything in flight (and a `transit` pseudo-branch appeared on screen).
+//
+// This runs a REAL cold cycle in a FRESH tenant — issue 10, check the mid-flight
+// moment, confirm 6 (partial), then the remaining 4 — and asserts the report
+// counts each arrived unit ONCE. A fresh tenant means the only `issue_to_branch`
+// movements in the window are this test's own, so the total is reconcilable by
+// hand (the demo tenant's bumpy pre-fix movements cannot confuse it).
+test('goods in transit are counted once — mid-flight, partial and full arrival', { skip: !sqlTestUrl() }, async () => {
+  // Fresh tenant + its own warehouse, branch and operator.
+  const owner = new Client({ connectionString: migrateUrl()! });
+  await owner.connect();
+  let tenant: string;
+  const loc: Record<string, string> = {};
+  try {
+    const {
+      rows: [t],
+    } = await owner.query<{ id: string }>("insert into tenants (name) values ('Usage transit T15') returning id");
+    tenant = t!.id;
+    const {
+      rows: [wh],
+    } = await owner.query<{ id: string }>(
+      `insert into locations (tenant_id, code, name_ar, type) values ($1, 'WH-UT', 'مخزن UT', 'warehouse') returning id`,
+      [tenant],
+    );
+    const {
+      rows: [br],
+    } = await owner.query<{ id: string }>(
+      `insert into locations (tenant_id, code, name_ar, type) values ($1, 'BR-UT', 'فرع UT', 'branch') returning id`,
+      [tenant],
+    );
+    const {
+      rows: [u],
+    } = await owner.query<{ id: string }>(
+      `insert into app_users (tenant_id, name, name_normalised, username, role, password_hash)
+       values ($1, 'UT Operator', public.normalise_name('UT Operator'), 'ut_operator', 'warehouse_manager', 'x') returning id`,
+      [tenant],
+    );
+    loc.wh = wh!.id;
+    loc.br = br!.id;
+    loc.wm = u!.id;
+    provisioned.push(tenant);
+  } finally {
+    await owner.end();
+  }
+
+  const win = {
+    from: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    to: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, tenant, async (tdb) => {
+      const item = await createItem(tdb, {
+        nameAr: 'صنف UT',
+        family: 'sellable',
+        costEgp: 10,
+        sku: 'UT-1',
+        barcode: 'UT-1',
+      });
+      return { variantId: item.variant.id };
+    });
+
+    const req = await withTenant(db, tenant, (tdb) =>
+      createRequisition(tdb, {
+        branchLocationId: loc.br!,
+        requestedBy: loc.wm!,
+        lines: [{ variantId: ctx.variantId, requestedQty: 10 }],
+      }),
+    );
+    await withTenant(db, tenant, (tdb) => approve(tdb, req.id, loc.wm!));
+
+    // ISSUE 10 — warehouse -> transit. Nothing has ARRIVED yet.
+    await withTenant(db, tenant, (tdb) =>
+      issue(tdb, req.id, loc.wm!, [{ variantId: ctx.variantId, qty: 10 }]),
+    );
+
+    await withTenant(db, tenant, async (tdb) => {
+      const rows = await usageByBranch(tdb, win);
+      assert.equal(
+        rows.length,
+        0,
+        'MID-FLIGHT: nothing has arrived at a branch — no transit row and no branch row',
+      );
+      assert.equal(
+        await usageTotalEgp(tdb, win),
+        '0.00',
+        'MID-FLIGHT: goods still in transit are NOT the branch value (the bug reported 100.00)',
+      );
+    });
+
+    // CONFIRM 6 — transit -> branch. A PARTIAL arrival counts 6, not 10 and not 16.
+    await withTenant(db, tenant, (tdb) =>
+      confirmReceipt(tdb, req.id, loc.wm!, [{ variantId: ctx.variantId, qty: 6 }]),
+    );
+    await withTenant(db, tenant, async (tdb) => {
+      const rows = await usageByBranch(tdb, win);
+      assert.equal(rows.length, 1, 'PARTIAL: exactly ONE row — the transit leg is not a second row');
+      assert.equal(rows[0]!.branch, 'فرع UT', 'the row is the BRANCH, never a transit pseudo-branch');
+      assert.equal(rows[0]!.issuedQty, '6.000', 'PARTIAL: only the 6 that arrived are counted');
+      assert.equal(rows[0]!.valueEgp, '60.00', 'PARTIAL: 6 x 10, counted once');
+      assert.equal(await usageTotalEgp(tdb, win), '60.00', 'PARTIAL: the total agrees with the rows');
+    });
+
+    // CONFIRM the remaining 4 — the full 10 has now arrived.
+    await withTenant(db, tenant, (tdb) =>
+      confirmReceipt(tdb, req.id, loc.wm!, [{ variantId: ctx.variantId, qty: 4 }]),
+    );
+    await withTenant(db, tenant, async (tdb) => {
+      const rows = await usageByBranch(tdb, win);
+      assert.equal(rows.length, 1, 'ARRIVED: still ONE row');
+      assert.equal(rows[0]!.issuedQty, '10.000', 'ARRIVED: all 10 counted ONCE, not 20');
+      assert.equal(rows[0]!.valueEgp, '100.00', 'ARRIVED: 10 x 10, counted once');
+
+      const total = await usageTotalEgp(tdb, win);
+      assert.equal(total, '100.00', 'ARRIVED: the total counts the 10 once (the bug reported 160.00)');
+
+      // The item-level rows AGREE with the total: the screen's figure is the sum
+      // of what it lists (1 x 10 at cost 10), reconcilable by hand.
+      assert.equal(rows.length, 1);
+      // Compared in whole piasters (BigInt of the digits) — never a JS float sum of
+      // money strings, which is exactly the bug this report exists to avoid.
+      const cents = (s: string): bigint => BigInt(s.replace('.', ''));
+      assert.equal(rows.reduce((s, r) => s + cents(r.valueEgp), 0n), cents(total));
     });
   });
 });

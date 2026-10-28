@@ -156,9 +156,25 @@ export interface UsageFilter {
 }
 
 /**
- * Stock ISSUED to each branch in the window, per variant, with its value.
+ * THE VALUE THAT ARRIVED AT EACH BRANCH IN THE WINDOW, per variant.
  *
- * An "issue to a branch" is a movement with reason `issue_to_branch`, whose
+ * SEMANTICS — COUNT EACH UNIT EXACTLY ONCE, AND ONLY WHEN IT HAS ARRIVED.
+ * Goods reach a branch in TWO ledger legs, BOTH carrying reason
+ * `issue_to_branch`: the issue leg moves warehouse -> TRANSIT, and the branch's
+ * confirm moves TRANSIT -> branch. A reader that grouped `issue_to_branch` by
+ * DESTINATION therefore attributed the SAME goods to a `transit` row AND to the
+ * branch row — the same units on the report twice, inflating the money total by
+ * everything currently in flight.
+ *
+ * The fix counts a movement ONLY when its destination is a location of type
+ * `branch` — i.e. the transit -> branch (confirm) leg. So the figure is "the
+ * value that ARRIVED at a branch in the window": goods still in transit
+ * contribute NOTHING until they land, and a `transit` row never appears. The
+ * filter is on the destination location's TYPE, never on the literal word
+ * `transit`, so renaming or retyping the staging location cannot silently
+ * re-introduce the double count.
+ *
+ * An "issue to a branch" is a movement with reason `issue_to_branch` whose
  * DESTINATION is the branch; the branch is therefore `to_location_id`, and its
  * Arabic name is the row's `branch`. `issuedQty` is `sum(qty)` and `valueEgp` is
  * `sum(qty * items.cost_egp)::numeric(12,2)` — the multiplication is done by
@@ -181,6 +197,7 @@ export async function usageByBranch(db: Queryable, filter: UsageFilter): Promise
        join item_variants v on v.id = m.variant_id and v.tenant_id = m.tenant_id
        join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
       where m.reason = 'issue_to_branch'
+        and l.type = 'branch'
         and m.occurred_at >= $1
         and m.occurred_at < $2
         and ($3::uuid is null or m.to_location_id = $3)
@@ -193,11 +210,20 @@ export async function usageByBranch(db: Queryable, filter: UsageFilter): Promise
 }
 
 /**
- * The TOTAL value of stock issued to branches in the window, per the SAME rule
- * {@link usageByBranch} rows carry — `sum(qty * items.cost_egp)::numeric(12,2)`.
+ * The TOTAL value of stock that ARRIVED at branches in the window, per the SAME
+ * rule {@link usageByBranch} rows carry —
+ * `sum(qty * items.cost_egp)::numeric(12,2)` over movements whose DESTINATION is
+ * a `branch`-type location (the transit -> branch leg).
+ *
+ * ONE RULE, ONE NUMBER. The total and the rows must agree, so this filter is the
+ * SAME as {@link usageByBranch}'s: only branch destinations are counted, so the
+ * warehouse -> transit leg contributes NOTHING and goods in transit are never
+ * added to the figure (they are not yet the branch's value). Filtering on the
+ * location's TYPE (not the literal word `transit`) means a renamed or retyped
+ * staging location cannot double the total.
  *
  * This is a COST figure, not a selling price: it is what the network PAID for
- * the stock that left the warehouse. It is computed in SQL, never summed in
+ * the stock that reached a branch. It is computed in SQL, never summed in
  * JavaScript — a JS float sum of the rows' `valueEgp` strings (`0.1 + 0.2`)
  * yields `0.30000000000000004`, which an owner's accounts will not accept. An
  * empty window sums to `'0.00'` (coalesced), so the screen shows a real zero
@@ -212,9 +238,11 @@ export async function usageTotalEgp(
   const { rows } = await db.query<{ total: string }>(
     `select coalesce(sum(m.qty * i.cost_egp), 0)::numeric(12,2) as "total"
        from stock_movements m
+       join locations l on l.id = m.to_location_id and l.tenant_id = m.tenant_id
        join item_variants v on v.id = m.variant_id and v.tenant_id = m.tenant_id
        join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
       where m.reason = 'issue_to_branch'
+        and l.type = 'branch'
         and m.occurred_at >= $1
         and m.occurred_at < $2`,
     [filter.from, filter.to],
