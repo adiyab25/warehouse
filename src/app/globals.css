@@ -274,3 +274,162 @@ p[role="alert"] {
   border-radius: 0.5rem;
   padding: 0.75rem;
 }
+
+/*
+ * THE REQUISITION SCREENS (Task 14) — layout only, and NO field styling.
+ *
+ * Same discipline as the intake door above: the look of a control lives in the
+ * shared rules, so a screen can be restyled without touching a component. These
+ * rules are the phone-first column, the tap targets and the ONE hazard Task 13
+ * already paid for: a catalogue name is a right-to-left string in a fixed-width
+ * column or a flex item, and a long UNBROKEN token refuses to shrink unless it
+ * is allowed to (`min-width: 0`) and can break (`overflow-wrap: anywhere`).
+ */
+
+.req-section {
+  margin-block: 1.25rem;
+}
+
+.req-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One requisition in the list, and one line in the detail. */
+.req-item,
+.req-line,
+.req-line-head {
+  min-width: 0;
+}
+
+.req-item {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  margin-block: 0.75rem;
+}
+
+/* The whole card is the tap target on a phone. */
+.req-link {
+  display: block;
+  padding: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.req-summary,
+.req-line-head,
+.req-actions,
+.req-quantities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.req-branch-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+/* WHAT was asked for: the item's Arabic name, on its own line so the desk reads
+ * the product first and the code underneath. WIDTH BUDGET: it must be able to
+ * shrink below its longest word (`min-width: 0`) and to BREAK a long unbroken
+ * token (`overflow-wrap: anywhere`), or a SKU-like catalogue string overflows
+ * the card and pushes the quantity inputs off a 390px phone. */
+.req-line-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.req-line {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-block: 0.75rem;
+}
+
+.req-line-code {
+  font-weight: 700;
+}
+
+.req-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.req-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.req-status {
+  font-weight: 700;
+}
+
+.req-status-line,
+.req-detail-branch {
+  margin-block: 0.25rem;
+  font-weight: 600;
+}
+
+/* The four quantities of a line, as a small definition list. */
+.req-quantities {
+  margin: 0.5rem 0 0;
+}
+
+.req-quantity {
+  min-width: 3.5rem;
+}
+
+.req-quantity dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.req-quantity dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* A quantity the desk types: full width of its own row, a generous tap target. */
+.req-qty {
+  display: block;
+  margin-block: 0.5rem;
+}
+
+.req-add {
+  margin-block: 0.5rem;
+}
+
+/* The primary action of a screen is full width and stands alone. */
+.req-primary {
+  width: 100%;
+  margin-block: 0.5rem;
+}
+
+/* A secondary action: outlined, never competing with the primary one. */
+.req-remove {
+  color: var(--danger-text);
+  background-color: transparent;
+  border: 1px solid var(--danger-text);
+}
+
+.req-problem {
+  color: var(--danger-text);
+}
+
+.req-ok {
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-block: 0.75rem;
+}

@@ -45,8 +45,9 @@ export function proxy(request: NextRequest): NextResponse {
 export const config = {
   // `/intake/:path*` matches `/intake` itself AND every nested path beneath it,
   // so a sub-route added under the door cannot slip past the cheap half of the
-  // gate. This half still only asks "is there a cookie"; the PAGE and the ACTION
-  // remain the real gate (they resolve a LIVE session and the role), which is
-  // why widening here is a belt-and-braces change, not a permission.
-  matcher: ['/', '/intake/:path*'],
+  // gate. `/requisitions/:path*` was added with Task 14's screens for the same
+  // reason. This half still only asks "is there a cookie"; the PAGE and the
+  // ACTION remain the real gate (they resolve a LIVE session and the role),
+  // which is why widening here is a belt-and-braces change, not a permission.
+  matcher: ['/', '/intake/:path*', '/requisitions/:path*'],
 };

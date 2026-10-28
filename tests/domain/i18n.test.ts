@@ -207,6 +207,10 @@ test('a key used in the app but missing from the dictionaries is detectable', ()
     'src/components/IntakeScreen.tsx',
     'src/components/ExpectedVsReceived.tsx',
     'src/components/ScanField.tsx',
+    'src/app/requisitions/page.tsx',
+    'src/app/requisitions/[id]/page.tsx',
+    'src/components/RequisitionListScreen.tsx',
+    'src/components/RequisitionDetailScreen.tsx',
     'src/proxy.ts',
     'src/i18n/index.ts',
   ];
