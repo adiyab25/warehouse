@@ -226,6 +226,206 @@ test('a session with no variance posts nothing', { skip: !sqlTestUrl() }, async 
   });
 });
 
+test('a mid-count ISSUE reconciles the ledger to the shelf, not to the frozen sheet', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'MOVEISS'));
+
+    // The sheet freezes expected = 100.
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.shelf.id, 100));
+    const session = await withTenant(db, t1, (tdb) =>
+      openCount(tdb, { locationId: ctx.shelf.id, startedBy: u1 }),
+    );
+
+    // ...then 20 leaves the shelf WHILE THE SHEETS ARE OUT. The ledger now
+    // holds 80 — the frozen expectation of 100 is stale.
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 20,
+        reason: 'write_off',
+        fromLocationId: ctx.shelf.id,
+      }),
+    );
+
+    // The shelf is counted at 75.
+    await withTenant(db, t1, (tdb) =>
+      recordCount(tdb, session.id, [{ variantId: ctx.variantId, countedQty: 75 }]),
+    );
+
+    const result = await withTenant(db, t1, (tdb) => closeCount(tdb, session.id, u1));
+    assert.equal(result.adjustments, 1, 'counted 75 against a live ledger of 80 — one correction');
+    assert.ok(result.movementsDuringCount >= 1, 'the mid-count issue must be reported as the shelf moving');
+
+    await withTenant(db, t1, async (tdb) => {
+      // The drift report still says −25 (counted 75 vs frozen 100): that is the
+      // "what changed since we started" number, NOT the posted amount.
+      const { rows: cl } = await tdb.query<{ variance_qty: string }>(
+        'select variance_qty from count_lines where count_session_id = $1 and variant_id = $2',
+        [session.id, ctx.variantId],
+      );
+      assert.equal(cl[0]?.variance_qty, '-25.000', 'variance_qty is DRIFT since open, kept as the report');
+
+      const { rows: mv } = await tdb.query<{
+        qty: string;
+        from_location_id: string | null;
+        to_location_id: string | null;
+        reason: string;
+      }>(
+        "select qty, from_location_id, to_location_id, reason from stock_movements where variant_id = $1 and reason = 'count_correction'",
+        [ctx.variantId],
+      );
+      assert.equal(mv.length, 1, 'exactly one correction');
+      assert.equal(mv[0]?.qty, '5.000', 'the reconciliation is |75 − 80| = 5, NOT the frozen |−25|');
+      assert.equal(mv[0]?.from_location_id, ctx.shelf.id, 'the ledger held more, so the correction leaves the shelf');
+      assert.equal(mv[0]?.to_location_id, null, 'one-sided — from only');
+      assert.equal(mv[0]?.reason, 'count_correction', 'reason is count_correction');
+
+      // THE POINT OF THE WHOLE FIX: the ledger ends at exactly what was counted.
+      assert.equal(
+        await onHandAt(tdb, ctx.variantId, ctx.shelf.id),
+        '75.000',
+        'the ledger ends at 75, NOT at 55 (which the frozen formula would have produced)',
+      );
+    });
+  });
+});
+
+test('a mid-count RETURN reconciles the ledger to the shelf, not to the frozen sheet', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'MOVERET'));
+
+    // The sheet freezes expected = 50.
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.shelf.id, 50));
+    const session = await withTenant(db, t1, (tdb) =>
+      openCount(tdb, { locationId: ctx.shelf.id, startedBy: u1 }),
+    );
+
+    // ...then 30 comes back to the shelf WHILE THE SHEETS ARE OUT. The ledger
+    // now holds 80 — the frozen expectation of 50 is stale.
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 30,
+        reason: 'return_from_branch',
+        toLocationId: ctx.shelf.id,
+      }),
+    );
+
+    // The shelf is counted at 90.
+    await withTenant(db, t1, (tdb) =>
+      recordCount(tdb, session.id, [{ variantId: ctx.variantId, countedQty: 90 }]),
+    );
+
+    const result = await withTenant(db, t1, (tdb) => closeCount(tdb, session.id, u1));
+    assert.equal(result.adjustments, 1, 'counted 90 against a live ledger of 80 — one correction');
+    assert.ok(result.movementsDuringCount >= 1, 'the mid-count return must be reported as the shelf moving');
+
+    await withTenant(db, t1, async (tdb) => {
+      // Drift report: counted 90 vs frozen 50 = +40. NOT the posted amount.
+      const { rows: cl } = await tdb.query<{ variance_qty: string }>(
+        'select variance_qty from count_lines where count_session_id = $1 and variant_id = $2',
+        [session.id, ctx.variantId],
+      );
+      assert.equal(cl[0]?.variance_qty, '40.000', 'variance_qty is DRIFT since open, kept as the report');
+
+      const { rows: mv } = await tdb.query<{
+        qty: string;
+        from_location_id: string | null;
+        to_location_id: string | null;
+      }>(
+        "select qty, from_location_id, to_location_id from stock_movements where variant_id = $1 and reason = 'count_correction'",
+        [ctx.variantId],
+      );
+      assert.equal(mv.length, 1, 'exactly one correction');
+      assert.equal(mv[0]?.qty, '10.000', 'the reconciliation is 90 − 80 = 10, NOT the frozen +40');
+      assert.equal(mv[0]?.from_location_id, null, 'the shelf held less, so the correction arrives — one-sided');
+      assert.equal(mv[0]?.to_location_id, ctx.shelf.id, 'a surplus arrives at the counted location');
+
+      assert.equal(
+        await onHandAt(tdb, ctx.variantId, ctx.shelf.id),
+        '90.000',
+        'the ledger ends at 90, NOT at 120 (which the frozen formula would have produced)',
+      );
+    });
+  });
+});
+
+test('a count with no mid-count movement reports zero movements and reconciles to the same figure', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'STILL'));
+
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.shelf.id, 40));
+    const session = await withTenant(db, t1, (tdb) =>
+      openCount(tdb, { locationId: ctx.shelf.id, startedBy: u1 }),
+    );
+    await withTenant(db, t1, (tdb) =>
+      recordCount(tdb, session.id, [{ variantId: ctx.variantId, countedQty: 37 }]),
+    );
+
+    const result = await withTenant(db, t1, (tdb) => closeCount(tdb, session.id, u1));
+    assert.equal(result.adjustments, 1, 'counted 37 vs expected 40 — one correction');
+    assert.equal(result.movementsDuringCount, 0, 'nothing moved between open and close');
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows: mv } = await tdb.query<{ qty: string; from_location_id: string | null }>(
+        "select qty, from_location_id from stock_movements where variant_id = $1 and reason = 'count_correction'",
+        [ctx.variantId],
+      );
+      assert.equal(mv.length, 1, 'exactly one correction');
+      assert.equal(mv[0]?.qty, '3.000', 'the drift is 37 − 40 = −3, and with no mid-count move the reconciliation agrees');
+      assert.equal(mv[0]?.from_location_id, ctx.shelf.id, 'a shortage leaves the counted location');
+      assert.equal(await onHandAt(tdb, ctx.variantId, ctx.shelf.id), '37.000', 'the ledger now says 37');
+    });
+  });
+});
+
+test('an uncounted line posts nothing even when stock moved mid-count', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'UNCMOVE'));
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.shelf.id, 10));
+
+    // Open snapshots the line with counted_qty NULL; the shelf is NEVER counted.
+    const session = await withTenant(db, t1, (tdb) =>
+      openCount(tdb, { locationId: ctx.shelf.id, startedBy: u1 }),
+    );
+
+    // A movement lands mid-count anyway.
+    await withTenant(db, t1, (tdb) =>
+      postMovement(tdb, {
+        variantId: ctx.variantId,
+        qty: 4,
+        reason: 'write_off',
+        fromLocationId: ctx.shelf.id,
+      }),
+    );
+
+    const result = await withTenant(db, t1, (tdb) => closeCount(tdb, session.id, u1));
+    assert.equal(result.adjustments, 0, 'an uncounted line is not a variance — nothing is posted');
+    assert.ok(result.movementsDuringCount >= 1, 'the mid-count move is still reported');
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        "select count(*)::int as n from stock_movements where variant_id = $1 and reason = 'count_correction'",
+        [ctx.variantId],
+      );
+      assert.equal(rows[0]!.n, 0, 'no correction, and above all no phantom write-off, was written');
+      assert.equal(
+        await onHandAt(tdb, ctx.variantId, ctx.shelf.id),
+        '6.000',
+        'only the mid-count write-off moved the shelf; the count wrote NOTHING',
+      );
+    });
+  });
+});
+
 test('an uncounted line posts nothing and is not a write-off', { skip: !sqlTestUrl() }, async () => {
   const { t1, u1 } = await provision();
 

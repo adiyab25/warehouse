@@ -199,29 +199,65 @@ export async function recordCount(
 }
 
 /**
- * Closes a count session and posts its variance to the ledger.
+ * Closes a count session and RECONCILES the ledger to the shelf.
  *
- * For every line that was COUNTED and whose variance is NON-ZERO, this posts ONE
- * ledger movement with reason `count_correction`, through {@link postMovement}
- * (the one gate that validates quantity, reason and locations and derives
- * discreteness from the item) — never a raw insert. A correction is legitimately
- * ONE-SIDED: a SHORTAGE (fewer found than expected) is
- * `from_location_id = the counted location` with NO destination, and a SURPLUS
- * (found stock) is `to_location_id = the counted location` with NO source. Both
+ * THE ADJUSTMENT IS A RECONCILIATION, NOT THE SHEET'S DRIFT. For every line
+ * that was COUNTED this posts — where needed — ONE ledger movement with reason
+ * `count_correction`, through {@link postMovement} (the one gate that validates
+ * quantity, reason and locations and derives discreteness from the item) —
+ * never a raw insert. The POSTED amount is
+ * `counted − the on-hand at the MOMENT OF CLOSING` (read inside this
+ * transaction and AFTER the pair's lock, so a concurrent issue or return cannot
+ * interleave), NOT the line's generated `variance_qty`.
+ *
+ * WHY THE DISTINCTION IS LOAD-BEARING: `variance_qty` is
+ * `coalesce(counted_qty, 0) - expected_qty`, and `expected_qty` was FROZEN when
+ * the line was created — so a movement that lands while the sheets are out (a
+ * sale, an issue, a return, a transfer) is invisible to it. Reconciling against
+ * that frozen number would reconcile the shelf to the SHEET, not to the ledger,
+ * and leave the ledger wrong:
+ *
+ *   issue 20 mid-count, counted 75: expected was 100, sheet drift is −25, but
+ *   the ledger already stands at 80 — the honest correction is 75 − 80 = −5,
+ *   taking the ledger to exactly 75 (the frozen formula would take it to 55);
+ *
+ *   return 30 mid-count, counted 90: expected was 50, sheet drift is +40, but
+ *   the ledger already stands at 80 — the honest correction is 90 − 80 = +10,
+ *   taking the ledger to exactly 90 (the frozen formula would take it to 120).
+ *
+ * The frozen `expected_qty` and the generated `variance_qty` are KEPT — they are
+ * the DRIFT report ("what changed since this sheet was started"), which is
+ * exactly the fact an operator needs to see; they are simply not the posted
+ * amount. The posted amount is the reconciliation to the shelf.
+ *
+ * A correction is legitimately ONE-SIDED, exactly as before: a SHORTAGE (the
+ * ledger holds MORE than was counted) is `from_location_id = the counted
+ * location` with NO destination, and a SURPLUS (the ledger holds LESS than was
+ * counted) is `to_location_id = the counted location` with NO source. Both
  * sides are never the same location (the ledger refuses from == to). The
- * movement carries `ref_type = 'COUNT'`, `ref_id` = the session, and the STABLE
- * per-line key `count:<sessionId>:<variantId>` (no timestamps), so a retried
- * close cannot double-post — and the closing user is written to the movement's
- * actor.
+ * movement carries `ref_type = 'COUNT'`, `ref_id` = the session, a human-readable
+ * `notes` describing the reconciliation, and the STABLE per-line key
+ * `count:<sessionId>:<variantId>` (no timestamps), so a retried close cannot
+ * double-post — and the closing user is written to the movement's actor. There is
+ * deliberately NO generated column for the posted amount: a generated column
+ * cannot read the ledger, so the movement row itself is the record.
  *
  * AN UNCOUNTED LINE POSTS NOTHING, AND IS NOT A WRITE-OFF. A line whose
  * `counted_qty` is NULL means the shelf was never counted — deliberately
  * distinct from a counted zero. `variance_qty` is `coalesce(counted_qty, 0) -
  * expected_qty`, which would read `-expected_qty` for a NULL line and look like
  * a full loss; this function therefore filters on `counted_qty is not null`
- * BEFORE the variance, so an uncounted line produces NO movement and the
+ * BEFORE computing anything, so an uncounted line produces NO movement and the
  * location's on-hand is left exactly as it was. Inventing a write-off for stock
  * nobody looked at is the worst thing a stocktake can do.
+ *
+ * IT REPORTS HOW MANY MOVEMENTS TOUCHED THE COUNTED PAIRS during the count, so
+ * the operator learns the shelf moved under them — `movementsDuringCount`. A
+ * non-zero figure is the signal that the `variance_qty` on the sheet and the
+ * posted adjustment legitimately DIFFER, and why: stock moved between
+ * `started_at` and the close. Zero means the sheet's drift and the posted
+ * correction agree, which is the only case where they can be read as the same
+ * number.
  *
  * CLOSING TWICE IS REFUSED, naming the state: the session is locked `for
  * update`, and a session that is already `closed` throws rather than re-posting
@@ -232,16 +268,18 @@ export async function recordCount(
  * (exactly as createReceipt / issue / postReturn do). A line that fails rolls
  * the whole close back, leaving the session `open` and every movement unposted.
  * Because a correction CHANGES balances, the SAME advisory lock every guarded
- * writer uses is taken before each post — {@link lockStockPair} on the
- * (variant, location) pair — so a concurrent issue or return on the same pair
- * cannot interleave with the correction. Call it with the scoped `db` from
- * inside `withTenant`; never nest `withTenant`.
+ * writer uses is taken before EACH reconciliation read AND its post —
+ * {@link lockStockPair} on the (variant, location) pair — so a concurrent issue
+ * or return on the same pair cannot interleave between the balance read and the
+ * movement that corrects it (a read of the balance and then a post against it is
+ * a lost-update race otherwise). Call it with the scoped `db` from inside
+ * `withTenant`; never nest `withTenant`.
  */
 export async function closeCount(
   db: Queryable,
   sessionId: string,
   closedBy: string,
-): Promise<{ adjustments: number }> {
+): Promise<{ adjustments: number; movementsDuringCount: number }> {
   requireNonEmpty(closedBy, 'closedBy', 'closeCount');
 
   // Lock the header so two concurrent closes serialise on it and the second sees
@@ -260,40 +298,57 @@ export async function closeCount(
     );
   }
 
-  // Only COUNTED lines (counted_qty is not null) with a NON-ZERO variance become
-  // a movement. The `counted_qty is not null` guard is load-bearing: without it
-  // an uncounted line's generated variance reads `-expected_qty` and would post
-  // a phantom write-off.
+  // Only COUNTED lines (counted_qty is not null) can produce a reconciliation.
+  // The `counted_qty is not null` guard is load-bearing: an uncounted line was
+  // never looked at, and its generated variance would read `-expected_qty` and
+  // post a phantom write-off. `variance_qty` is deliberately NOT selected — the
+  // posted amount is derived from the LIVE ledger below, not from the frozen
+  // sheet.
   const { rows: lineRows } = await db.query<{
     variant_id: string;
-    variance_qty: string;
+    counted_qty: string;
   }>(
-    `select variant_id, variance_qty
+    `select variant_id, counted_qty
        from count_lines
       where tenant_id = ${TENANT}
         and count_session_id = $1
         and counted_qty is not null
-        and variance_qty <> 0
       order by variant_id`,
     [sessionId],
   );
 
   let adjustments = 0;
   for (const line of lineRows) {
-    const variance = round3(Number(line.variance_qty));
-    if (variance === 0) continue;
+    const countedQty = round3(Number(line.counted_qty));
 
     // Serialise with every other guarded writer on this (variant, location)
-    // pair BEFORE posting: a concurrent issue or return must not interleave
-    // with a deliberate correction of the same pair.
+    // pair BEFORE reading the balance AND before posting: a concurrent issue or
+    // return must not slip between the read and the correction.
     await lockStockPair(db, line.variant_id, session.location_id);
 
-    // A shortage leaves the location (from only, no destination); a surplus
-    // arrives at it (to only, no source). Never both sides the same location.
-    const shortage = variance < 0;
+    // The LIVE on-hand for this pair, read inside this transaction and AFTER the
+    // lock. Absence of a row means zero — a pair that never appears in the
+    // ledger is not stock.
+    const { rows: onHandRows } = await db.query<{ qty: string }>(
+      `select coalesce(
+                (select qty from on_hand where variant_id = $1 and location_id = $2),
+                0
+              ) as qty`,
+      [line.variant_id, session.location_id],
+    );
+    const onHandNow = round3(Number(onHandRows[0]?.qty ?? 0));
+
+    // The RECONCILIATION: take the ledger to what the shelf actually holds. A
+    // zero adjustment needs no movement — the ledger already agrees.
+    const adjustment = round3(countedQty - onHandNow);
+    if (adjustment === 0) continue;
+
+    // A shortage removes from the location (from only, no destination); a
+    // surplus arrives at it (to only, no source). Never both sides the same.
+    const shortage = adjustment < 0;
     await postMovement(db, {
       variantId: line.variant_id,
-      qty: Math.abs(variance),
+      qty: Math.abs(adjustment),
       reason: 'count_correction',
       fromLocationId: shortage ? session.location_id : null,
       toLocationId: shortage ? null : session.location_id,
@@ -301,9 +356,32 @@ export async function closeCount(
       refType: COUNT_REF_TYPE,
       refId: sessionId,
       idempotencyKey: countCorrectionKey(sessionId, line.variant_id),
+      notes: `stocktake reconciliation: counted ${countedQty}, ledger on-hand at close ${onHandNow}`,
     });
     adjustments += 1;
   }
+
+  // HOW THE SHELF MOVED UNDER THE COUNTER: movements on the SAME (variant,
+  // location) pairs this session covers, posted between `started_at` and now.
+  // This session's OWN corrections are excluded — they are the reconciliation,
+  // not a shelf movement — so a run that posts nothing still reports nothing.
+  const { rows: movedRows } = await db.query<{ n: number }>(
+    `select count(*)::int as n
+       from stock_movements m
+      where m.tenant_id = ${TENANT}
+        and m.occurred_at >= $2
+        and m.occurred_at <= now()
+        and (m.from_location_id = $3 or m.to_location_id = $3)
+        and exists (
+          select 1 from count_lines cl
+           where cl.tenant_id = m.tenant_id
+             and cl.count_session_id = $1
+             and cl.variant_id = m.variant_id
+        )
+        and not (m.reason = 'count_correction' and m.ref_id = $1)`,
+    [sessionId, session.started_at, session.location_id],
+  );
+  const movementsDuringCount = movedRows[0]?.n ?? 0;
 
   // Advance the header LAST, so a failure above rolls the whole close back and
   // leaves the session `open` with every movement unposted.
@@ -314,5 +392,5 @@ export async function closeCount(
     [sessionId, closedBy],
   );
 
-  return { adjustments };
+  return { adjustments, movementsDuringCount };
 }

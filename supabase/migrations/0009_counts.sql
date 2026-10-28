@@ -20,6 +20,20 @@
 --                        and STORED, so a shortfall is fixed the moment it is
 --                        recorded and cannot be edited into a match.
 --
+-- `variance_qty` IS THE DRIFT REPORT, NOT THE POSTED AMOUNT. It measures what
+-- changed since this sheet was started, and it is exactly what an operator needs
+-- to see: `expected_qty` is frozen at open, so a sale, issue or return that
+-- lands while the sheets are out is INVISIBLE to it. The amount ACTUALLY POSTED
+-- on close is the RECONCILIATION to the shelf — `counted_qty − the on-hand at
+-- the moment of closing`, read live from the ledger inside closeCount's
+-- transaction (see src/db/counts.ts::closeCount). Reconciling the ledger to the
+-- FROZEN number instead would reconcile the shelf to the SHEET and leave the
+-- ledger wrong: expected 100, issue 20 mid-count, counted 75 leaves a drift of
+-- −25 but the ledger already stands at 80, so the honest correction is −5 (to 75,
+-- not 55). A generated column cannot read the ledger, so there is deliberately
+-- NO generated column for the posted amount — the movement row itself is the
+-- record.
+--
 -- A NULL `counted_qty` means NOT YET COUNTED — deliberately distinct from
 -- "counted zero". src/db/counts.ts::closeCount treats an uncounted line as "not
 -- counted" and posts NOTHING for it; a phantom write-off of stock nobody looked
@@ -107,10 +121,16 @@ create table count_lines (
   -- "counted zero", which is what lets closeCount tell an uncounted line from a
   -- deliberate zero.
   counted_qty numeric(12, 3),
-  -- The reported difference, DERIVED on write and stored: the number a person
-  -- sees on the variance report, and being GENERATED it cannot be set by hand or
-  -- quietly edited to hide a shortfall. Shortage (fewer found than expected) is
-  -- negative, surplus (found stock) positive.
+  -- The reported DRIFT since this sheet was started, DERIVED on write and stored:
+  -- the number a person sees on the variance report, and being GENERATED it
+  -- cannot be set by hand or quietly edited to hide a shortfall. Shortage (fewer
+  -- found than expected) is negative, surplus (found stock) positive.
+  --
+  -- THIS IS NOT THE POSTED AMOUNT. `expected_qty` is frozen at open, so a
+  -- movement that lands while the sheets are out is invisible here; the amount
+  -- actually written to the ledger on close is the reconciliation
+  -- `counted_qty − the on-hand at close` (src/db/counts.ts::closeCount). This
+  -- column is the "what changed since we started" report beside it.
   variance_qty numeric(12, 3) generated always as (coalesce(counted_qty, 0) - expected_qty) stored,
   -- One line per variant per session. Also what makes the app's upsert in
   -- recordCount land on ONE line however many times a shelf is counted.
