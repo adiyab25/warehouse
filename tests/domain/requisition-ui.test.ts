@@ -403,11 +403,14 @@ test('issuing posts stock to transit, and a double submit posts exactly one move
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 10 }] }),
+      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 20 }] }),
     );
     await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { key: 'app', id: requisitionId }));
 
-    const leg = { variantId: f.variant1, qty: 6, from: 0 };
+    // A PARTIAL leg: 5 of 20. Its remainder (15) leaves room for a SECOND tap to
+    // be a legal issue on its own — so the anchor, and nothing else, is what
+    // stops the ledger being written twice.
+    const leg = { variantId: f.variant1, qty: 5, from: 0 };
     const first = await withTenant(db, f.tenant, (tdb) =>
       answered(() => issueIn(tdb, cookieManager, { key: 'iss-1', id: requisitionId, lines: [leg] })),
     );
@@ -432,15 +435,15 @@ test('issuing posts stock to transit, and a double submit posts exactly one move
       assert.equal(rows.length, 1, 'a double submit must post exactly ONE movement');
       assert.equal(
         rows[0]!.idempotency_key,
-        issueAnchor(requisitionId, f.variant1, 6),
+        issueAnchor(requisitionId, f.variant1, 5),
         'the anchor the screen holds matches the ledger key the write actually used',
       );
 
       const rows2 = await onHand(tdb, { variantId: f.variant1 });
       const by = Object.fromEntries(rows2.map((r) => [r.locationId, r.qty]));
-      assert.equal(by[transit.id], '6.000', 'transit holds what was issued');
+      assert.equal(by[transit.id], '5.000', 'transit holds what was issued');
       assert.equal(by[f.branchA] ?? '0.000', '0.000', 'in-transit stock is NOT yet the branch’s');
-      assert.equal(by[f.warehouse], '-6.000', 'the warehouse is debited');
+      assert.equal(by[f.warehouse], '-5.000', 'the warehouse is debited');
     });
 
     // The same KEY with DIFFERENT content is not answered with the old row as
