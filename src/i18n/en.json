@@ -38,6 +38,8 @@
   "intake.submit": "Post receipt",
   "intake.posting": "Posting…",
   "intake.posted": "The receipt was posted.",
+  "intake.posted.partial": "Partly received — {count} line(s) are still outstanding. Scan or type the remaining item and post again against the SAME receipt.",
+  "intake.posted.still_outstanding": "Still outstanding",
   "intake.posted.shortfalls": "Lines with a difference: {count}",
   "intake.duplicate": "This note number was already used by a receipt posted on {date}.",
   "intake.error.unauthenticated": "Your session has ended. Sign in again.",

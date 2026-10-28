@@ -167,6 +167,11 @@ p[role="alert"] {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: baseline;
+  /* A flex item's default `min-width: auto` refuses to shrink below its
+   * LONGEST UNBREAKABLE WORD, so without this a long no-space product name (a
+   * right-to-left catalogue string in a fixed-width column) pushes the whole
+   * card wider than the phone. Allow the container to shrink and break. */
+  min-width: 0;
 }
 
 .intake-line-code {
@@ -175,9 +180,17 @@ p[role="alert"] {
 
 /* WHAT resolved: the item's Arabic name, on its own line so the door person
  * reads the product first and the code underneath. Right-aligned by the RTL
- * document; the machine-read code stays LTR via .ltr-value. */
+ * document; the machine-read code stays LTR via .ltr-value.
+ *
+ * WIDTH BUDGET: the name gets its own full-width line (`flex-basis: 100%`) but
+ * MUST be able to shrink (`min-width: 0`) and MUST break a long unbroken token
+ * (`overflow-wrap: anywhere`). A realistic Arabic or mixed name wraps on its
+ * own; a long no-break token (a SKU-like string with no spaces) would otherwise
+ * overflow the card and push the quantity inputs off-screen. */
 .intake-line-name {
-  flex: 1 0 100%;
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: 600;
 }
 

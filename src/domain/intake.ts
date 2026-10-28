@@ -49,6 +49,28 @@ export const RECEIVING_ROLES = ['owner', 'warehouse_manager'] as const;
 export type ReceivingRole = (typeof RECEIVING_ROLES)[number];
 
 /**
+ * Why an intake request was refused — a named condition, not a bare `Error`.
+ * Every refusal the screen can render carries one of these CODES, and each code
+ * has its OWN message (see {@link REFUSAL_MESSAGE_KEYS}): a `forbidden` is not
+ * dressed up as "you are not signed in".
+ */
+export type IntakeRefusal = 'unauthenticated' | 'forbidden' | 'invalid';
+
+/**
+ * The i18n key for each refusal CODE — the ONE place a code becomes a sentence.
+ *
+ * The screen switches on the code the action returned and looks the message up
+ * HERE, so every refusal maps to a distinct string instead of every failure
+ * collapsing to the unauthenticated one. `forbidden` and `invalid` are NOT the
+ * "session has ended" message.
+ */
+export const REFUSAL_MESSAGE_KEYS: Record<IntakeRefusal, string> = {
+  unauthenticated: 'intake.error.unauthenticated',
+  forbidden: 'intake.error.forbidden',
+  invalid: 'intake.error.invalid',
+};
+
+/**
  * May `role` post a receipt? The single answer, asked server-side by every
  * intake seam. Anything unrecognised — an empty string, `null`, `undefined`, a
  * role from another deployment — is refused, because the safe default for a

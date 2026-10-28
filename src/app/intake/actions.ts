@@ -6,13 +6,15 @@ import { SESSION_COOKIE } from '../../auth/cookie.ts';
 import { configuredTenantId } from '../../auth/tenant.ts';
 import { getAppPool } from '../../db/app-pool.ts';
 import { withTenant } from '../../db/client.ts';
-import type { ReceiptDuplicate } from '../../db/receipts.ts';
-import type { ReceiptForm, ScanResult } from '../../domain/intake.ts';
+import type { ReceiptForm } from '../../domain/intake.ts';
 import {
   IntakeError,
   checkNoteIn,
   scanIn,
   submitIn,
+  type IntakeRefusal,
+  type NoteOutcome,
+  type ScanOutcome,
   type SubmitOutcome,
 } from './handler.ts';
 
@@ -43,28 +45,59 @@ async function sessionCookieValue(): Promise<string | undefined> {
 }
 
 /**
+ * Turns a thrown failure into a refusal CODE the screen can render.
+ *
+ * An {@link IntakeError} already names its condition. Anything ELSE — a
+ * database failure, a bug — is logged here and reported as `invalid`, so no raw
+ * error text reaches the browser and no unexpected throw escapes an action.
+ */
+function refusalCode(err: unknown): IntakeRefusal {
+  if (err instanceof IntakeError) return err.code;
+  console.error('intake: unexpected failure in an intake action', err);
+  return 'invalid';
+}
+
+/**
  * Resolves one scanned (or typed) barcode to a variant of THIS tenant.
  *
- * Answers `{ kind: 'unknown', code }` for a code that matches nothing — echoing
- * what was scanned — and never creates an item. A caller who is not signed in,
- * or whose role may not receive goods, is refused (an `IntakeError`); the field
- * is only reachable from a signed-in screen, so that path is defensive.
+ * ANSWERS, NEVER THROWS. Returns `{ ok: true, scan }` where `scan` is
+ * `{ kind: 'unknown', code }` (echoing what was scanned, never creating an
+ * item) or `{ kind: 'variant', … }`; a refusal comes back as
+ * `{ ok: false, code }` so the field can show the RIGHT reason — a `forbidden`
+ * is not "you are not signed in". The cookie is read INSIDE the `try`, so a
+ * failure to read it cannot reject the action and strand the screen.
  */
-export async function scan(code: string): Promise<ScanResult> {
-  const cookie = await sessionCookieValue();
-  return withTenant(await getAppPool(), configuredTenantId(), (db) => scanIn(db, cookie, code));
+export async function scan(code: string): Promise<ScanOutcome> {
+  try {
+    const cookie = await sessionCookieValue();
+    const result = await withTenant(await getAppPool(), configuredTenantId(), (db) =>
+      scanIn(db, cookie, code),
+    );
+    return { ok: true, scan: result };
+  } catch (err) {
+    return { ok: false, code: refusalCode(err) };
+  }
 }
 
 /**
  * Surfaces an already-posted receipt under the same delivery-note number, so the
  * screen can warn the manager BEFORE the goods are accepted.
  *
- * A WARNING, never a refusal: the second delivery still posts. Returns `null`
- * when nothing has been posted under that number yet.
+ * A WARNING, never a refusal: the second delivery still posts. Returns
+ * `{ ok: true, duplicate: null }` when nothing has been posted under that
+ * number yet, and `{ ok: false, code }` when the CHECK itself was refused — a
+ * failure to check must not masquerade as "nothing found".
  */
-export async function checkNote(refNo: string): Promise<ReceiptDuplicate | null> {
-  const cookie = await sessionCookieValue();
-  return withTenant(await getAppPool(), configuredTenantId(), (db) => checkNoteIn(db, cookie, refNo));
+export async function checkNote(refNo: string): Promise<NoteOutcome> {
+  try {
+    const cookie = await sessionCookieValue();
+    const duplicate = await withTenant(await getAppPool(), configuredTenantId(), (db) =>
+      checkNoteIn(db, cookie, refNo),
+    );
+    return { ok: true, duplicate };
+  } catch (err) {
+    return { ok: false, code: refusalCode(err) };
+  }
 }
 
 /**
@@ -75,15 +108,17 @@ export async function checkNote(refNo: string): Promise<ReceiptDuplicate | null>
  * waiting is an ANSWER, not an exception — and Next masks a thrown error's
  * message on a production client — so a refusal comes back as
  * `{ ok: false, error: { code, message } }` and the UI switches on the code.
- * Anything unexpected is logged here and reported as `invalid`, so no raw
- * database text reaches the browser.
+ * The cookie is read INSIDE the `try`, so a throw while reading it cannot
+ * reject the action and leave the submit button disabled.
  *
  * IDEMPOTENT ON THE FORM: `form.formId` is the receipt's own id, so a
- * double-tap or a lost response collapses to ONE movement.
+ * double-tap or a lost response collapses to ONE movement. When the receipt is
+ * still `receiving`, `status`/`outstanding` tell the screen to keep the form key
+ * so the remainder is posted against the SAME receipt.
  */
 export async function submitReceipt(form: ReceiptForm): Promise<SubmitOutcome> {
-  const cookie = await sessionCookieValue();
   try {
+    const cookie = await sessionCookieValue();
     const result = await withTenant(await getAppPool(), configuredTenantId(), (db) =>
       submitIn(db, cookie, form),
     );
@@ -92,6 +127,8 @@ export async function submitReceipt(form: ReceiptForm): Promise<SubmitOutcome> {
       receiptId: result.receiptId,
       shortfalls: result.shortfalls,
       duplicateOf: result.duplicateOf,
+      status: result.status,
+      outstanding: result.outstanding,
       error: null,
     };
   } catch (err) {
@@ -101,6 +138,8 @@ export async function submitReceipt(form: ReceiptForm): Promise<SubmitOutcome> {
         receiptId: null,
         shortfalls: [],
         duplicateOf: null,
+        status: null,
+        outstanding: [],
         error: { code: err.code, message: err.message },
       };
     }
@@ -112,6 +151,8 @@ export async function submitReceipt(form: ReceiptForm): Promise<SubmitOutcome> {
       receiptId: null,
       shortfalls: [],
       duplicateOf: null,
+      status: null,
+      outstanding: [],
       error: { code: 'invalid', message: 'unexpected failure' },
     };
   }

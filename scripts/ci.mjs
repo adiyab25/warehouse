@@ -12,9 +12,14 @@
  *       `SQL_TEST_DATABASE_URL` and `MIGRATE_DATABASE_URL` are set, so the DB
  *       tests can never silently vanish from a green CI run. The refusal is one
  *       loud line naming the missing variable(s).
- *   (2) IT REFUSES TO PASS ON A SKIP. The suite's own summary is read back, and
- *       `npm run ci` exits non-zero if ANY test reported as skipped — a skipped
- *       test is an unproven claim, not a pass.
+ *   (2) IT REFUSES TO PASS ON A SKIP — AND IT REFUSES TO PASS ON A RUN THAT
+ *       PROVED NOTHING. The suite's own summary is read back (from the TAP
+ *       stream, anchored to the runner's own footer) and `npm run ci` exits
+ *       non-zero if ANY test reported as skipped, if the summary is ABSENT or
+ *       unreadable, or if the run executed ZERO tests (`# tests`/`# pass` of 0).
+ *       That decision lives in {@link ./ci-gate.mjs} (`evaluateRun`) so it can
+ *       be driven by a test with captured TAP, and it FAILS CLOSED: an absent
+ *       summary is a refusal, never "zero skipped".
  *
  * Typecheck (`tsc --noEmit`) and lint (`eslint .`) run first, so the gate is the
  * whole `tsc && eslint && test` chain and there is exactly one command to run.
@@ -26,6 +31,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { evaluateRun } from './ci-gate.mjs';
 
 const REQUIRED_ENV = ['SQL_TEST_DATABASE_URL', 'MIGRATE_DATABASE_URL'];
 
@@ -90,22 +97,11 @@ child.on('error', (err) => {
 });
 
 child.on('close', (code) => {
-  const skippedMatch = output.match(/^# skipped (\d+)\s*$/m);
-  const skipped = skippedMatch ? Number(skippedMatch[1]) : 0;
-
-  if (skipped > 0) {
-    console.error(
-      `ci: ${skipped} test(s) were SKIPPED — the gate refuses to pass on a suite that skipped itself green. ` +
-        'Set the database urls (see .env.example) so every test actually runs.',
-    );
-    process.exit(1);
+  const verdict = evaluateRun(output, code);
+  if (!verdict.ok) {
+    console.error(verdict.message);
+    process.exit(code !== 0 ? (code ?? 1) : 1);
   }
-
-  if (code !== 0) {
-    console.error(`ci: the test suite failed (exit ${code}).`);
-    process.exit(code ?? 1);
-  }
-
-  console.log('ci: all gates passed — typecheck, lint, and the full suite with 0 skipped.');
+  console.log(verdict.message);
   process.exit(0);
 });

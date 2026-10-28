@@ -6,6 +6,7 @@ import {
   createReceipt,
   findPostedDuplicate,
   postReceipt,
+  type Receipt,
   type ReceiptDuplicate,
   type ReceiptShortfall,
 } from '../../db/receipts.ts';
@@ -14,6 +15,7 @@ import {
   canReceive,
   receivedLines,
   resolveScan,
+  type IntakeRefusal,
   type ReceiptForm,
   type ScanResult,
 } from '../../domain/intake.ts';
@@ -45,8 +47,9 @@ import {
  * ledger's writers and re-implements none of their rules.
  */
 
-/** Why an intake request was refused — a named condition, not a bare `Error`. */
-export type IntakeRefusal = 'unauthenticated' | 'forbidden' | 'invalid';
+/** Why an intake request was refused — re-exported from the domain so existing
+ * importers keep working, while the CODE → message map lives with the rules. */
+export type { IntakeRefusal };
 
 /**
  * A refusal the screen can render, carrying a machine-readable `code` AND a
@@ -173,6 +176,15 @@ export interface SubmitResult {
   shortfalls: ReceiptShortfall[];
   /** A delivery note already posted by another receipt in this tenant, if any. */
   duplicateOf: ReceiptDuplicate | null;
+  /**
+   * The header's status AFTER this post: `posted` once EVERY line is received,
+   * `receiving` while some goods have not arrived. The screen keeps the form
+   * key and the outstanding lines on `receiving` so the remainder is posted
+   * against the SAME receipt.
+   */
+  status: 'posted' | 'receiving';
+  /** Variant ids whose goods have NOT arrived yet (received_qty is NULL). */
+  outstanding: string[];
 }
 
 /**
@@ -191,8 +203,44 @@ export interface SubmitOutcome {
   receiptId: string | null;
   shortfalls: ReceiptShortfall[];
   duplicateOf: ReceiptDuplicate | null;
+  /** See {@link SubmitResult.status} — `receiving` keeps the form key open. */
+  status: 'posted' | 'receiving' | null;
+  /** See {@link SubmitResult.outstanding} — the lines still to arrive. */
+  outstanding: string[];
   error: { code: IntakeRefusal; message: string } | null;
 }
+
+/**
+ * What the SCAN action returns: the resolved code, or a refusal CODE.
+ *
+ * `scan` used to let an {@link IntakeError} escape, and the screen caught
+ * EVERYTHING and rendered "your session has ended" — so a `forbidden` or a
+ * database failure lied about the reason. Like {@link SubmitOutcome}, a refusal
+ * is now an ANSWER carrying the code the UI switches on, never a throw the
+ * client must guess at.
+ */
+export type ScanOutcome = { ok: true; scan: ScanResult } | { ok: false; code: IntakeRefusal };
+
+/**
+ * What the delivery-note pre-check returns: the warning (or `null`), or a
+ * refusal CODE. The screen surfaces the refusal instead of swallowing it into
+ * "no duplicate warning" — a failure to CHECK is not the same as a clean check.
+ */
+export type NoteOutcome =
+  | { ok: true; duplicate: ReceiptDuplicate | null }
+  | { ok: false; code: IntakeRefusal };
+
+/**
+ * The ONE refusal shared by a content mismatch and a cross-tenant id.
+ *
+ * `formId` becomes `receipts.id`, a GLOBAL primary key. If the caller re-uses
+ * an id that already exists but with DIFFERENT content — or an id that already
+ * exists in ANOTHER tenant (invisible here under RLS) — both are answered with
+ * this SAME message, so the response is not an existence oracle: the two are
+ * indistinguishable to the caller. The distinction is logged SERVER-SIDE only.
+ */
+export const CONFLICT_MESSAGE =
+  'Intake: this form key is already in use and does not match the delivery it recorded — reload the screen and start a new form.';
 
 /**
  * Posts a delivery: creates the receipt for this FORM and records what arrived.
@@ -268,24 +316,141 @@ export async function submitIn(
     );
   }
 
-  const receipt = await createReceipt(db, {
-    id: form.formId,
-    sourceLocationId,
-    destLocationId: dest.id,
-    refNo,
-    lines: form.lines.map((line) => ({ variantId: line.variantId, expectedQty: line.expected })),
-  });
+  // A KEY PROTECTS A RETRY, NOT A CHANGE OF MIND. `formId` is the receipt's
+  // GLOBAL primary key. If a row with that id already exists AND is visible
+  // here, the submission must match what that receipt recorded (its header and
+  // the EXPECTED quantity of every line it names) — otherwise this is not a
+  // retry but a different delivery wearing the same key, and it is refused.
+  // Received quantities are deliberately NOT compared: a genuine retry repeats
+  // them, but a delivery arriving in PARTS changes them legitimately.
+  const existing = await findReceipt(db, form.formId);
+  if (existing) {
+    const matches = await submittedMatchesStored(db, existing, {
+      sourceLocationId,
+      destLocationId: dest.id,
+      refNo: refNo.toUpperCase(),
+      lines: form.lines,
+    });
+    if (!matches) {
+      console.warn(
+        `intake: form ${form.formId} was re-submitted with content that differs from the stored ` +
+          'receipt — refused (a key protects a retry, not a change of mind).',
+      );
+      throw new IntakeError('invalid', CONFLICT_MESSAGE);
+    }
+  }
+
+  let receipt: Receipt;
+  try {
+    receipt = await createReceipt(db, {
+      id: form.formId,
+      sourceLocationId,
+      destLocationId: dest.id,
+      refNo,
+      lines: form.lines.map((line) => ({ variantId: line.variantId, expectedQty: line.expected })),
+    });
+  } catch (err) {
+    // The id exists GLOBALLY but is NOT visible in this tenant (RLS filtered
+    // it): another tenant's receipt wears the same key. This must be refused
+    // with the SAME message a content mismatch gets — the response must not be
+    // a cross-tenant EXISTENCE ORACLE. The distinction is logged server-side.
+    if (err instanceof Error && /already exists but is not visible to this tenant/.test(err.message)) {
+      console.warn(
+        `intake: form ${form.formId} matches a receipt NOT visible to this tenant (another tenant, ` +
+          'or RLS) — refused with the SAME message as a content mismatch, so the caller learns nothing.',
+      );
+      throw new IntakeError('invalid', CONFLICT_MESSAGE);
+    }
+    throw err;
+  }
 
   // Already posted by an earlier submit of THIS form: a retry, not a new
   // delivery. Report the numbers the receipt actually stored — the same answer
   // the first call gave — instead of posting the goods a second time (Task 6
   // would refuse it, and a refusal is the wrong answer to a double-tap).
   if (receipt.status === 'posted') {
-    return { receiptId: receipt.id, shortfalls: await storedShortfalls(db, receipt.id), duplicateOf: null };
+    return {
+      receiptId: receipt.id,
+      shortfalls: await storedShortfalls(db, receipt.id),
+      duplicateOf: null,
+      status: 'posted',
+      outstanding: [],
+    };
   }
 
   const posted = await postReceipt(db, receipt.id, receivedLines(form.lines), user.userId);
-  return { receiptId: receipt.id, shortfalls: posted.shortfalls, duplicateOf: posted.duplicateOf };
+  const { status, outstanding } = await readReceiptProgress(db, receipt.id);
+  return {
+    receiptId: receipt.id,
+    shortfalls: posted.shortfalls,
+    duplicateOf: posted.duplicateOf,
+    status,
+    outstanding,
+  };
+}
+
+/** Reads one receipt header by id, or `null` when nothing is visible here. */
+async function findReceipt(db: Queryable, receiptId: string): Promise<Receipt | null> {
+  const { rows } = await db.query<Receipt>('select * from receipts where id = $1', [receiptId]);
+  return rows[0] ?? null;
+}
+
+/**
+ * Does the submission agree with what an EXISTING receipt recorded?
+ *
+ * Compares the header (source, destination, normalised note number) and the
+ * EXPECTED quantity of every line the submission names. The stored lines are a
+ * SUPERSET-allowed match: a part delivery legitimately names fewer lines than
+ * the receipt holds, but every line it names must carry the expected quantity
+ * the receipt was created with — a changed expected quantity, or a variant that
+ * was never on this receipt, is a mismatch. Received quantities are not
+ * compared (see the caller).
+ */
+async function submittedMatchesStored(
+  db: Queryable,
+  stored: Receipt,
+  submitted: {
+    sourceLocationId: string;
+    destLocationId: string;
+    refNo: string;
+    lines: ReceiptForm['lines'];
+  },
+): Promise<boolean> {
+  if (stored.source_location_id !== submitted.sourceLocationId) return false;
+  if (stored.dest_location_id !== submitted.destLocationId) return false;
+  if ((stored.ref_no ?? null) !== submitted.refNo) return false;
+
+  const { rows } = await db.query<{ variant_id: string; expected_qty: string }>(
+    `select variant_id, expected_qty from receipt_lines
+      where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        and receipt_id = $1`,
+    [stored.id],
+  );
+  const expected = new Map(rows.map((row) => [row.variant_id, Number(row.expected_qty)]));
+  return submitted.lines.every((line) => expected.get(line.variantId) === Number(line.expected));
+}
+
+/** A receipt's status AFTER a post, plus the lines whose goods have not arrived. */
+async function readReceiptProgress(
+  db: Queryable,
+  receiptId: string,
+): Promise<{ status: 'posted' | 'receiving'; outstanding: string[] }> {
+  const { rows } = await db.query<{ status: string }>(
+    'select status from receipts where id = $1',
+    [receiptId],
+  );
+  const status = rows[0]?.status === 'posted' ? 'posted' : 'receiving';
+  if (status === 'posted') return { status, outstanding: [] };
+
+  const { rows: pending } = await db.query<{ variant_id: string }>(
+    `select variant_id from receipt_lines
+      where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        and receipt_id = $1
+        and received_qty is null
+      order by variant_id`,
+    [receiptId],
+  );
+  return { status, outstanding: pending.map((row) => row.variant_id) };
 }
 
 /**

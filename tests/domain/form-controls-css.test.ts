@@ -76,3 +76,32 @@ test('the .ltr-value rule is preserved unchanged', () => {
     'direction: ltr; text-align: left; unicode-bidi: plaintext;',
   );
 });
+
+// WIDTH BUDGET for the scanned product name (Task 13). The name is a
+// right-to-left catalogue string in a fixed-width column; a long UNBROKEN token
+// (no spaces, no hyphens) refuses to shrink (a flex item defaults to
+// `min-width: auto`) and overflows the card, pushing the quantity inputs off the
+// screen. This guard fails if either the shrink allowance or the break rule is
+// removed. The rendered proof at 390px is in the report.
+test('the scanned product name has a width budget (shrinks and breaks)', () => {
+  const name = ruleFor('.intake-line-name');
+  assert.ok(name, 'globals.css must define .intake-line-name');
+  assert.match(
+    name.body,
+    /min-width\s*:\s*0\b/,
+    'the name must be allowed to shrink below its longest word (min-width: 0)',
+  );
+  assert.match(
+    name.body,
+    /overflow-wrap\s*:\s*(anywhere|break-word)/,
+    'a long unbroken name must be able to break (overflow-wrap: anywhere)',
+  );
+
+  const head = ruleFor('.intake-line-head');
+  assert.ok(head, 'globals.css must define .intake-line-head');
+  assert.match(
+    head.body,
+    /min-width\s*:\s*0\b/,
+    'the flex container must be allowed to shrink too, or the item cannot break',
+  );
+});

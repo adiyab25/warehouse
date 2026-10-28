@@ -25,9 +25,12 @@ import { SIGN_IN_PATH } from './app/sign-in/contract';
  *
  * WHAT IT DOES NOT MATCH: the sign-in page, the sign-out route, and Next's own
  * assets. The matcher is deliberately an ALLOW-LIST of the routes that need a
- * session (`/`, `/intake`) rather than a deny-list, so a route added later is
- * protected by default instead of silently public. (`/intake` was added to this
- * list with Task 13's screen: the cheap half of the gate must cover it too.)
+ * session (`/`, `/intake` and any `/intake/<sub>` route) rather than a
+ * deny-list, so a route added later is protected by default instead of silently
+ * public. (`/intake` was added to this list with Task 13's screen; the
+ * `/intake/:path*` entry was WIDENED deliberately so a later `/intake/<sub>`
+ * page is covered by the cheap edge half too, not only by the page/action gate
+ * — see the note below on why the page gate is still the real one.)
  */
 export function proxy(request: NextRequest): NextResponse {
   const hasSessionCookie = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -40,5 +43,10 @@ export function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ['/', '/intake'],
+  // `/intake/:path*` matches `/intake` itself AND every nested path beneath it,
+  // so a sub-route added under the door cannot slip past the cheap half of the
+  // gate. This half still only asks "is there a cookie"; the PAGE and the ACTION
+  // remain the real gate (they resolve a LIVE session and the role), which is
+  // why widening here is a belt-and-braces change, not a permission.
+  matcher: ['/', '/intake/:path*'],
 };

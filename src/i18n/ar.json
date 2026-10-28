@@ -42,6 +42,8 @@
   "intake.submit": "تسجيل الاستلام",
   "intake.posting": "جارٍ التسجيل…",
   "intake.posted": "تم تسجيل الاستلام.",
+  "intake.posted.partial": "تم استلام جزء من الإذن — ما زال {count} سطرًا غير مستلَم. امسح الصنف المتبقي أو اكتبه ثم سجّله على نفس الإذن.",
+  "intake.posted.still_outstanding": "غير مستلَم بعد",
   "intake.posted.shortfalls": "عدد الأسطر ذات الفرق: {count}",
   "intake.duplicate": "رقم الإذن مُستخدَم في إذن مُسجَّل بتاريخ {date}.",
   "intake.error.unauthenticated": "انتهت الجلسة. سجّل الدخول من جديد.",

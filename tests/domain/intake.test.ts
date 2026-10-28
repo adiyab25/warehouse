@@ -6,7 +6,15 @@ import { after, test } from 'node:test';
 
 import { Client } from 'pg';
 
-import { scanIn, checkNoteIn, submitIn, frontDoor } from '../../src/app/intake/handler.ts';
+import { checkNote, scan, submitReceipt } from '../../src/app/intake/actions.ts';
+import {
+  CONFLICT_MESSAGE,
+  IntakeError,
+  checkNoteIn,
+  frontDoor,
+  scanIn,
+  submitIn,
+} from '../../src/app/intake/handler.ts';
 import { SESSION_COOKIE } from '../../src/auth/cookie.ts';
 import { createSession } from '../../src/auth/session.ts';
 import { withTenant } from '../../src/db/client.ts';
@@ -14,8 +22,10 @@ import { createItem } from '../../src/db/items.ts';
 import { createLocation, warehouseLocation } from '../../src/db/locations.ts';
 import { onHand } from '../../src/db/movements.ts';
 import type { ItemVariant } from '../../src/db/types.ts';
+import { hasKey, t } from '../../src/i18n/index.ts';
 import {
   RECEIVING_ROLES,
+  REFUSAL_MESSAGE_KEYS,
   type ReceiptForm,
   canReceive,
   previewShortfalls,
@@ -164,6 +174,56 @@ test('only owner and warehouse_manager may receive goods', () => {
   assert.equal(canReceive('branch_user'), false, 'a branch_user must never post a receipt');
   assert.equal(canReceive(''), false);
   assert.equal(canReceive(undefined), false);
+});
+
+test('each refusal CODE maps to its OWN message — forbidden is not “not signed in”', () => {
+  const keys = Object.values(REFUSAL_MESSAGE_KEYS);
+  assert.equal(
+    new Set(keys).size,
+    keys.length,
+    'every refusal code must map to a DISTINCT message key',
+  );
+  assert.notEqual(
+    REFUSAL_MESSAGE_KEYS.forbidden,
+    REFUSAL_MESSAGE_KEYS.unauthenticated,
+    'a forbidden refusal must not reuse the unauthenticated message',
+  );
+  assert.notEqual(REFUSAL_MESSAGE_KEYS.invalid, REFUSAL_MESSAGE_KEYS.unauthenticated);
+
+  for (const key of keys) {
+    assert.equal(hasKey(key, 'ar'), true, `${key} must exist in the Arabic dictionary`);
+    assert.equal(hasKey(key, 'en'), true, `${key} must exist in the English dictionary`);
+  }
+
+  // The screen renders `t(REFUSAL_MESSAGE_KEYS[code])`; the FORBIDDEN code must
+  // therefore produce the permission sentence, never the session one.
+  assert.notEqual(
+    t(REFUSAL_MESSAGE_KEYS.forbidden),
+    t(REFUSAL_MESSAGE_KEYS.unauthenticated),
+    'a forbidden refusal must not render the “you are not signed in” message',
+  );
+  assert.equal(t(REFUSAL_MESSAGE_KEYS.forbidden), t('intake.error.forbidden'));
+});
+
+test('the server actions ANSWER rather than throw when they cannot resolve a request', async () => {
+  // There is no request scope in `node --test`, so reading the session cookie
+  // throws. That is EXACTLY the "throw before the try" that used to reject the
+  // action and strand the submit button; every action must turn it into an
+  // outcome the screen can render, never a rejection it never catches.
+  const submitted = await submitReceipt({
+    formId: randomUUID(),
+    refNo: 'dn-smoke',
+    sourceLocationId: 'not-a-location',
+    lines: [{ variantId: 'not-a-variant', expected: 1, received: 1 }],
+  });
+  assert.equal(submitted.ok, false, 'the submit action must answer, not reject');
+  assert.ok(submitted.error, 'a refusal must arrive as a structured error on the outcome');
+
+  const scanned = await scan('AB-0012');
+  assert.equal(scanned.ok, false, 'the scan action must answer, not reject');
+
+  const noted = await checkNote('DN-1');
+  assert.equal(noted.ok, false, 'the note pre-check must answer, not reject');
 });
 
 // ---------------------------------------------------------------------------
@@ -564,12 +624,198 @@ test('the required fields are required at the moment of entry', { skip: !sqlTest
   });
 });
 
+// IMPORTANT #3: the SCREEN must be able to continue a PART delivery. `submitIn`
+// reports `status` and the `outstanding` lines, so the screen keeps the form key
+// and the remainder posts against the SAME receipt — not a fresh one.
+test('a part delivery can be continued against the SAME receipt', { skip: !sqlTestUrl() }, async () => {
+  const { t1, manager } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'CONT'));
+    const outstandingItem = await withTenant(db, t1, (tdb) =>
+      createItem(tdb, { nameAr: 'حزام', nameEn: 'Belt', family: 'sellable', sku: 'CONT-2', barcode: 'CONT-2' }),
+    );
+    const token = await tokenFor(db, t1, manager);
+    const formId = randomUUID();
+
+    // First lorry: one line arrived, one did not.
+    const first = await withTenant(db, t1, (tdb) =>
+      submitIn(tdb, token, {
+        formId,
+        refNo: 'dn-cont',
+        sourceLocationId: ctx.vendor.id,
+        lines: [
+          { variantId: ctx.variantId, expected: 10, received: 10 },
+          { variantId: outstandingItem.variant.id, expected: 20, received: null },
+        ],
+      }),
+    );
+    assert.equal(first.status, 'receiving', 'a part-received receipt reports `receiving`');
+    assert.deepEqual(first.outstanding, [outstandingItem.variant.id], 'the unarrived line is named outstanding');
+
+    // The remainder, against the SAME key the screen kept.
+    const completion = await withTenant(db, t1, (tdb) =>
+      submitIn(tdb, token, {
+        formId,
+        refNo: 'dn-cont',
+        sourceLocationId: ctx.vendor.id,
+        lines: [{ variantId: outstandingItem.variant.id, expected: 20, received: 18 }],
+      }),
+    );
+    assert.equal(completion.receiptId, first.receiptId, 'the remainder posts against the SAME receipt');
+    assert.equal(completion.status, 'posted', 'once every line arrived the receipt is posted');
+    assert.deepEqual(completion.outstanding, []);
+    assert.deepEqual(completion.shortfalls, [
+      { variantId: outstandingItem.variant.id, expected: 20, received: 18, variance: -2 },
+    ]);
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows: receipts } = await tdb.query<{ n: number }>('select count(*)::int as n from receipts');
+      assert.equal(receipts[0]!.n, 1, 'a continued part delivery is ONE receipt, not two');
+      const { rows: moves } = await tdb.query<{ n: number }>(
+        "select count(*)::int as n from stock_movements where reason = 'receipt'",
+      );
+      assert.equal(moves[0]!.n, 2, 'the one receipt has TWO postings (one per line that arrived)');
+    });
+  });
+});
+
+// IMPORTANT #4: a key protects a RETRY, not a change of mind. Re-using the same
+// form key with EDITED lines must be a NAMED refusal, never a silent success.
+test('re-using a form key with different content is refused, not reported as success', { skip: !sqlTestUrl() }, async () => {
+  const { t1, owner } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'EDIT'));
+    const token = await tokenFor(db, t1, owner);
+    const formId = randomUUID();
+
+    const form = (expected: number, received: number): ReceiptForm => ({
+      formId,
+      refNo: 'dn-edit',
+      sourceLocationId: ctx.vendor.id,
+      lines: [{ variantId: ctx.variantId, expected, received }],
+    });
+
+    await withTenant(db, t1, (tdb) => submitIn(tdb, token, form(40, 36)));
+
+    // The SAME key, an EDITED expected quantity.
+    await assert.rejects(
+      () => withTenant(db, t1, (tdb) => submitIn(tdb, token, form(50, 50))),
+      (err: unknown) =>
+        err instanceof IntakeError && err.code === 'invalid' && err.message === CONFLICT_MESSAGE,
+      'an edited resubmit must be a NAMED invalid refusal, not a silent success',
+    );
+
+    // A GENUINE retry — the identical content — still returns the stored result.
+    const retry = await withTenant(db, t1, (tdb) => submitIn(tdb, token, form(40, 36)));
+    assert.deepEqual(
+      retry.shortfalls,
+      [{ variantId: ctx.variantId, expected: 40, received: 36, variance: -4 }],
+      'a retry of the same content returns the receipt’s own numbers',
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>('select count(*)::int as n from receipts');
+      assert.equal(rows[0]!.n, 1, 'the refused edit wrote nothing');
+    });
+  });
+});
+
+// IMPORTANT #5: a caller-supplied id is a GLOBAL key. Re-using an id that exists
+// in ANOTHER tenant (invisible under RLS) must be refused with EXACTLY the same
+// message a same-tenant content mismatch gets — the response must not be an
+// existence oracle.
+test('a cross-tenant id and a content mismatch are indistinguishable to the caller', { skip: !sqlTestUrl() }, async () => {
+  const tenantA = await provision();
+  const tenantB = await provision();
+
+  await withDb(async (db) => {
+    const aCtx = await withTenant(db, tenantA.t1, (tdb) => setup(tdb, 'XA'));
+    const bCtx = await withTenant(db, tenantB.t1, (tdb) => setup(tdb, 'XB'));
+    const aToken = await tokenFor(db, tenantA.t1, tenantA.owner);
+    const bToken = await tokenFor(db, tenantB.t1, tenantB.owner);
+
+    const formId = randomUUID();
+    // Tenant A's receipt, carrying the supplied key.
+    await withTenant(db, tenantA.t1, (tdb) =>
+      submitIn(tdb, aToken, {
+        formId,
+        refNo: 'dn-x',
+        sourceLocationId: aCtx.vendor.id,
+        lines: [{ variantId: aCtx.variantId, expected: 5, received: 5 }],
+      }),
+    );
+
+    const capture = async (fn: () => Promise<unknown>): Promise<IntakeError> => {
+      try {
+        await fn();
+      } catch (err) {
+        assert.ok(err instanceof IntakeError, 'the refusal must be an IntakeError');
+        return err;
+      }
+      throw new Error('expected the call to be refused');
+    };
+
+    // Path 1: tenant B supplies A's receipt id (invisible to B — RLS).
+    const crossTenant = await capture(() =>
+      withTenant(db, tenantB.t1, (tdb) =>
+        submitIn(tdb, bToken, {
+          formId,
+          refNo: 'dn-x',
+          sourceLocationId: bCtx.vendor.id,
+          lines: [{ variantId: bCtx.variantId, expected: 5, received: 5 }],
+        }),
+      ),
+    );
+
+    // Path 2: tenant A re-uses its OWN key with a different expected quantity.
+    const mismatch = await capture(() =>
+      withTenant(db, tenantA.t1, (tdb) =>
+        submitIn(tdb, aToken, {
+          formId,
+          refNo: 'dn-x',
+          sourceLocationId: aCtx.vendor.id,
+          lines: [{ variantId: aCtx.variantId, expected: 9, received: 9 }],
+        }),
+      ),
+    );
+
+    assert.equal(crossTenant.code, 'invalid');
+    assert.equal(mismatch.code, 'invalid');
+    assert.equal(
+      crossTenant.message,
+      mismatch.message,
+      'the cross-tenant and mismatch refusals must be INDISTINGUISHABLE — no existence oracle',
+    );
+    assert.equal(crossTenant.message, CONFLICT_MESSAGE);
+
+    // Positive control: tenant B's OWN form, its own content, posts normally.
+    const ok = await withTenant(db, tenantB.t1, (tdb) =>
+      submitIn(tdb, bToken, {
+        formId: randomUUID(),
+        refNo: 'dn-y',
+        sourceLocationId: bCtx.vendor.id,
+        lines: [{ variantId: bCtx.variantId, expected: 5, received: 5 }],
+      }),
+    );
+    assert.equal(ok.status, 'posted', 'a caller may still create its own receipt with its own key');
+  });
+});
+
 // ---------------------------------------------------------------------------
-// The WIRING — a screen whose tests all pass but which never calls the gate is
-// the defect these two assertions exist to catch.
+// SMOKE CHECKS (SOURCE GREPS) — NOT GUARDS.
+//
+// These two tests read source text with `readFileSync` and assert on it. They
+// are SMOKE CHECKS, not controls: they pass even if the code is bypassed at
+// runtime (a screen that imports the gate but never calls it still greps clean),
+// so they prove the *shape* of the wiring exists, never that it is exercised.
+// The REAL guards are the database-backed tests above, which drive the same
+// seams against Postgres. Kept (not deleted) as a cheap early warning that a
+// file lost its `'use server'`/session-cookie plumbing entirely.
 // ---------------------------------------------------------------------------
 
-test('the intake actions resolve the caller through the app’s one session mechanism', () => {
+test('SMOKE (source grep): the intake actions still look like the app’s one session mechanism', () => {
   const actions = readFileSync(join(REPO_ROOT, 'src', 'app', 'intake', 'actions.ts'), 'utf8');
 
   assert.match(actions, /^'use server';/m, 'the actions module must be a server-action module');
@@ -590,7 +836,7 @@ test('the intake actions resolve the caller through the app’s one session mech
   );
 });
 
-test('the barcode field opts out of RTL, and the shared form styles are reused', () => {
+test('SMOKE (source grep): the barcode field opts out of RTL, and shared form styles are reused', () => {
   const scanField = readFileSync(join(REPO_ROOT, 'src', 'components', 'ScanField.tsx'), 'utf8');
   assert.match(scanField, /ltr-value/, 'the machine-read field must use the shared .ltr-value class');
   assert.match(scanField, /dir="ltr"/, 'a scanned code must never be rendered right-to-left');

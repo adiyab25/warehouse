@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 import { checkNote, scan, submitReceipt } from '../app/intake/actions';
 import type { SubmitOutcome } from '../app/intake/handler';
-import type { ReceiptForm } from '../domain/intake';
+import { REFUSAL_MESSAGE_KEYS, type IntakeRefusal, type ReceiptForm } from '../domain/intake';
 import { formatDate, formatNumber, t } from '../i18n';
 import { ExpectedVsReceived, type ExpectedVsReceivedLine } from './ExpectedVsReceived';
 import { ScanField } from './ScanField';
@@ -74,6 +74,8 @@ interface ScreenLine {
 interface ScanMessage {
   kind: 'unknown' | 'already' | 'error';
   code: string;
+  /** Why the scan was refused — the field shows THIS code's message, not a guess. */
+  refusal?: IntakeRefusal;
 }
 
 /**
@@ -120,6 +122,7 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
   const [scanValue, setScanValue] = useState('');
   const [scanMessage, setScanMessage] = useState<ScanMessage | null>(null);
   const [duplicate, setDuplicate] = useState<{ receiptId: string; postedAt: string } | null>(null);
+  const [noteError, setNoteError] = useState<IntakeRefusal | null>(null);
   const [scanning, setScanning] = useState(false);
   const [posting, setPosting] = useState(false);
   const [problem, setProblem] = useState<'invalid' | 'unauthenticated' | 'forbidden' | null>(null);
@@ -167,7 +170,14 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
     setScanning(true);
     setScanMessage(null);
     try {
-      const result = await scan(code);
+      const outcome = await scan(code);
+      if (!outcome.ok) {
+        // A refusal is an ANSWER carrying its own code: show THAT message, not
+        // a blanket "you are not signed in".
+        setScanMessage({ kind: 'error', code: '', refusal: outcome.code });
+        return;
+      }
+      const result = outcome.scan;
       if (result.kind === 'unknown') {
         // NEVER silent: the person is told exactly what was read, in Latin
         // digits, so they can compare it with the label on the box.
@@ -178,23 +188,41 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
       addOrBumpLine(result);
       setScanMessage({ kind: 'already', code: result.variant.barcode });
     } catch {
-      setScanMessage({ kind: 'error', code: '' });
+      // The action answers rather than throws, but if anything escapes, still
+      // report it as a problem rather than a silent no-op.
+      setScanMessage({ kind: 'error', code: '', refusal: 'invalid' });
     } finally {
       setScanning(false);
     }
   }
 
-  /** Leaving the note field: warn about a note already booked, before we accept. */
+  /**
+   * Leaving the note field: warn about a note already booked, before we accept.
+   *
+   * ON FAILURE IT SAYS SO. The check returning a refusal is NOT the same as the
+   * check finding nothing: a failed lookup is surfaced with its own message
+   * rather than being swallowed into "no duplicate warning" (which would let a
+   * manager wave through a note that may already have been booked).
+   */
   async function handleNoteBlur() {
     const value = refNo.trim();
     if (value === '') {
       setDuplicate(null);
+      setNoteError(null);
       return;
     }
     try {
-      setDuplicate(await checkNote(value));
+      const outcome = await checkNote(value);
+      if (outcome.ok) {
+        setDuplicate(outcome.duplicate);
+        setNoteError(null);
+      } else {
+        setDuplicate(null);
+        setNoteError(outcome.code);
+      }
     } catch {
       setDuplicate(null);
+      setNoteError('invalid');
     }
   }
 
@@ -226,31 +254,53 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
       return;
     }
     setPosting(true);
-    const form: ReceiptForm = {
-      formId,
-      refNo: refNo.trim(),
-      sourceLocationId: sourceId,
-      lines: parsed.map((line) => ({
-        variantId: line.variantId,
-        expected: line.expectedNum ?? 0,
-        received: line.receivedNum,
-      })),
-    };
+    // The in-flight flag is cleared in `finally`, so a throw anywhere — even
+    // reading the session cookie before the action's own try — can NEVER leave
+    // the submit button permanently disabled.
+    try {
+      const form: ReceiptForm = {
+        formId,
+        refNo: refNo.trim(),
+        sourceLocationId: sourceId,
+        lines: parsed.map((line) => ({
+          variantId: line.variantId,
+          expected: line.expectedNum ?? 0,
+          received: line.receivedNum,
+        })),
+      };
 
-    const result = await submitReceipt(form);
-    setPosting(false);
-    setOutcome(result);
-    if (result.ok) {
-      // The delivery is booked. Start a GENUINELY new form: a new key, so the
-      // next lorry gets its own receipt.
-      setLines([]);
-      setRefNo('');
-      setScanValue('');
-      setScanMessage(null);
-      setDuplicate(null);
-      setFormId(randomUuid());
-    } else {
-      setProblem(result.error?.code ?? 'invalid');
+      const result = await submitReceipt(form);
+      setOutcome(result);
+      if (!result.ok) {
+        setProblem(result.error?.code ?? 'invalid');
+        return;
+      }
+      if (result.status === 'receiving') {
+        // A PART DELIVERY. KEEP the form key and the lines whose goods have not
+        // arrived, so the remainder is posted against the SAME receipt (their
+        // `received` is cleared — they have not arrived yet). The banner says
+        // "partly received … outstanding", never "posted".
+        const outstanding = new Set(result.outstanding);
+        setLines((prev) =>
+          prev
+            .filter((line) => outstanding.has(line.variantId))
+            .map((line) => ({ ...line, received: '', receivedEdited: false })),
+        );
+        setScanValue('');
+        setScanMessage(null);
+        setDuplicate(null);
+      } else {
+        // Fully posted. Start a GENUINELY new form: a new key, so the next
+        // lorry gets its own receipt.
+        setLines([]);
+        setRefNo('');
+        setScanValue('');
+        setScanMessage(null);
+        setDuplicate(null);
+        setFormId(randomUuid());
+      }
+    } finally {
+      setPosting(false);
     }
   }
 
@@ -260,6 +310,11 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
     expected: line.expectedNum,
     received: line.receivedNum,
   }));
+
+  // The codes still outstanding after a PART post, so the banner can name them.
+  const outstandingCodes = (outcome?.ok ? outcome.outstanding : [])
+    .map((variantId) => parsed.find((line) => line.variantId === variantId)?.code)
+    .filter((code): code is string => code != null);
 
   return (
     <div className="intake">
@@ -281,6 +336,11 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
           {duplicate ? (
             <p role="alert" className="duplicate-warning">
               {t('intake.duplicate', { params: { date: formatDate(new Date(duplicate.postedAt)) } })}
+            </p>
+          ) : null}
+          {noteError ? (
+            <p role="alert" className="intake-problem">
+              {t(REFUSAL_MESSAGE_KEYS[noteError])}
             </p>
           ) : null}
         </div>
@@ -337,7 +397,7 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
                 ? t('intake.unknown', { params: { code: scanMessage.code } })
                 : scanMessage.kind === 'already'
                   ? t('intake.already', { params: { code: scanMessage.code } })
-                  : t('intake.error.unauthenticated')}
+                  : t(REFUSAL_MESSAGE_KEYS[scanMessage.refusal ?? 'invalid'])}
             </p>
           ) : null}
         </div>
@@ -424,17 +484,28 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
 
         {problem ? (
           <p role="alert" className="intake-problem">
-            {problem === 'unauthenticated'
-              ? t('intake.error.unauthenticated')
-              : problem === 'forbidden'
-                ? t('intake.error.forbidden')
-                : t('intake.error.invalid')}
+            {t(REFUSAL_MESSAGE_KEYS[problem])}
           </p>
         ) : null}
 
         {outcome?.ok ? (
           <div className="intake-posted" aria-live="polite">
-            <p>{t('intake.posted')}</p>
+            {outcome.status === 'receiving' ? (
+              <>
+                <p>
+                  {t('intake.posted.partial', {
+                    params: { count: formatNumber(outcome.outstanding.length) },
+                  })}
+                </p>
+                {outstandingCodes.length > 0 ? (
+                  <p className="ltr-value">
+                    {t('intake.posted.still_outstanding')}: {outstandingCodes.join(', ')}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p>{t('intake.posted')}</p>
+            )}
             {outcome.duplicateOf ? (
               <p role="alert" className="duplicate-warning">
                 {t('intake.duplicate', {
