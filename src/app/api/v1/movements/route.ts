@@ -1,4 +1,6 @@
+import { postMovementRoute } from '../../../../api/movements-write.ts';
 import { readRoute } from '../../../../api/read.ts';
+import { writeRoute } from '../../../../api/write.ts';
 import { optEnum, optInstant, optUuid, parseCursor, parseLimit } from '../../../../api/params.ts';
 import { listMovements } from '../../../../db/read-api.ts';
 import { MOVEMENT_REASONS } from '../../../../domain/movement.ts';
@@ -18,12 +20,13 @@ const route = readRoute((db, url) => {
     limit: parseLimit(q),
     cursor: parseCursor(q, { s: 'seq' }),
   });
-});
+}, { allow: 'GET, HEAD, POST, OPTIONS' });
 
 export const GET = route.GET;
 export const HEAD = route.HEAD;
 export const OPTIONS = route.OPTIONS;
-export const POST = route.POST;
+/** POST /api/v1/movements — see `src/api/movements-write.ts` (write scope, Idempotency-Key, allowlisted reasons). */
+export const POST = writeRoute(postMovementRoute);
 export const PUT = route.PUT;
 export const PATCH = route.PATCH;
 export const DELETE = route.DELETE;

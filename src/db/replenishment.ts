@@ -108,6 +108,45 @@ export interface BelowMinimumOptions {
 }
 
 /**
+ * One (item, location) pair's standing against its minimum — the SAME
+ * definition {@link belowMinimum} reports on: on-hand is summed across the
+ * item's ACTIVE variants, the item must be active with an active variant, the
+ * location must be a policy location (warehouse/branch) and the level must
+ * carry a minimum. Returns `null` when the pair is not tracked under that
+ * definition (so it can never alert). `atOrBelow` is decided in SQL on exact
+ * numerics. Quantities are strings.
+ *
+ * Call it with the scoped `db`; callers that compare before/after for an
+ * EDGE must hold an item-level advisory lock around both reads.
+ */
+export async function itemLevelAt(
+  db: Queryable,
+  itemId: string,
+  locationId: string,
+): Promise<{ onHand: string; minQty: string; atOrBelow: boolean } | null> {
+  const { rows } = await db.query<{ onHand: string; minQty: string; atOrBelow: boolean }>(
+    `select coalesce(oh.qty, 0)::numeric(12,3)::text as "onHand",
+            ll.min_qty::numeric(12,3)::text as "minQty",
+            coalesce(oh.qty, 0) <= ll.min_qty as "atOrBelow"
+       from location_levels ll
+       join items i on i.id = ll.item_id and i.tenant_id = ll.tenant_id and i.active
+       join locations l on l.id = ll.location_id and l.tenant_id = ll.tenant_id
+       left join lateral (
+         select sum(o.qty) as qty
+           from on_hand o
+           join item_variants v on v.id = o.variant_id
+          where v.item_id = ll.item_id and v.active and o.location_id = ll.location_id
+       ) oh on true
+      where ll.item_id = $1 and ll.location_id = $2
+        and ll.min_qty is not null
+        and exists (select 1 from item_variants av where av.item_id = ll.item_id and av.active)
+        and l.type in ${POLICY_TYPES}`,
+    [itemId, locationId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * Every (item, location) AT OR BELOW its minimum, lowest cover first.
  *
  * `onHand <= minQty` is inclusive on purpose: an item exactly at its minimum is

@@ -100,6 +100,42 @@ export interface CountSessionInsert {
   closed_at?: Date | null;
 }
 
+export interface DomainEvent {
+  id: string;
+  tenant_id: string;
+  type: 'movement.posted' | 'requisition.status_changed' | 'stock.low';
+  payload: unknown;
+  occurred_at: Date;
+  delivered_at: Date | null;
+}
+
+export interface DomainEventInsert {
+  id?: string;
+  tenant_id: string;
+  type: 'movement.posted' | 'requisition.status_changed' | 'stock.low';
+  payload: unknown;
+  occurred_at?: Date;
+  delivered_at?: Date | null;
+}
+
+export interface EventSubscription {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  event_type: 'movement.posted' | 'requisition.status_changed' | 'stock.low';
+  url: string;
+  active: boolean;
+}
+
+export interface EventSubscriptionInsert {
+  id?: string;
+  tenant_id: string;
+  client_id: string;
+  event_type: 'movement.posted' | 'requisition.status_changed' | 'stock.low';
+  url: string;
+  active?: boolean;
+}
+
 export interface ItemVariant {
   id: string;
   tenant_id: string;
@@ -412,6 +448,8 @@ export interface Database {
   app_users: AppUser;
   count_lines: CountLine;
   count_sessions: CountSession;
+  domain_events: DomainEvent;
+  event_subscriptions: EventSubscription;
   item_variants: ItemVariant;
   items: Item;
   location_levels: LocationLevel;
@@ -431,7 +469,7 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['api_clients', 'app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'login_attempts', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'sessions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['api_clients', 'app_users', 'count_lines', 'count_sessions', 'domain_events', 'event_subscriptions', 'item_variants', 'items', 'location_levels', 'locations', 'login_attempts', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'sessions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
@@ -445,6 +483,9 @@ export const foreignKeys = [
   { table: 'count_sessions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'count_sessions', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'count_sessions', columns: 'tenant_id,started_by', definition: "FOREIGN KEY (tenant_id, started_by) REFERENCES app_users(tenant_id, id)" },
+  { table: 'domain_events', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'event_subscriptions', columns: 'tenant_id,client_id', definition: "FOREIGN KEY (tenant_id, client_id) REFERENCES api_clients(tenant_id, id)" },
+  { table: 'event_subscriptions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'item_variants', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'item_variants', columns: 'tenant_id,item_id', definition: "FOREIGN KEY (tenant_id, item_id) REFERENCES items(tenant_id, id) ON DELETE RESTRICT" },
   { table: 'items', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },

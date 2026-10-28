@@ -6,7 +6,11 @@
  *
  * EVERY failure is `{ error: { code, message } }` with a stable `code`:
  *   400 invalid_parameter · 401 unauthorized · 403 forbidden · 404 not_found
- *   405 method_not_allowed · 500 internal
+ *   405 method_not_allowed · 409 idempotency_conflict / insufficient_stock
+ *   413 payload_too_large · 415 unsupported_media_type · 422 invalid_field
+ *   500 internal
+ * `field?` names the request field at fault when there is one (additive; `code`
+ * and `message` are unchanged for every existing error).
  * An unexpected exception becomes a GENERIC 500 — never a stack, SQL text or id.
  *
  * There are NO CORS headers anywhere: this is a server-to-server API.
@@ -18,9 +22,21 @@ export class ApiError extends Error {
   readonly code: string;
   /** Extra response headers (e.g. `Allow` on a 405). */
   readonly headers: Record<string, string>;
+  /** The request field at fault, when one is (`{error:{field}}`). */
+  readonly field: string | undefined;
+  /** Extra machine-readable members merged into `error` (never overriding code/message/field). */
+  readonly details: Record<string, unknown> | undefined;
 
-  constructor(status: number, code: string, message: string, headers: Record<string, string> = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    headers: Record<string, string> = {},
+    extra: { field?: string; details?: Record<string, unknown> } = {},
+  ) {
     super(message);
+    this.field = extra.field;
+    this.details = extra.details;
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
@@ -63,7 +79,8 @@ export function scrubMessage(m: string): string {
  */
 export function errorResponse(e: unknown, req?: Request): Response {
   if (e instanceof ApiError) {
-    return jsonResponse({ error: { code: e.code, message: e.message } }, e.status, e.headers);
+    const error = { ...(e.details ?? {}), code: e.code, message: e.message, ...(e.field ? { field: e.field } : {}) };
+    return jsonResponse({ error }, e.status, e.headers);
   }
   const id = randomUUID().slice(0, 8);
   let route = '-';
@@ -81,4 +98,4 @@ export function errorResponse(e: unknown, req?: Request): Response {
 }
 
 export const invalidParameter = (field: string, why: string): ApiError =>
-  new ApiError(400, 'invalid_parameter', `Invalid parameter "${field}": ${why}`);
+  new ApiError(400, 'invalid_parameter', `Invalid parameter "${field}": ${why}`, {}, { field });

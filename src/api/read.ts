@@ -19,7 +19,8 @@ export type ReadRunner = (db: Queryable, url: URL) => Promise<unknown>;
 
 const ALLOW = 'GET, HEAD, OPTIONS';
 
-export function readRoute(run: ReadRunner) {
+export function readRoute(run: ReadRunner, opts: { allow?: string } = {}) {
+  const allow = opts.allow ?? ALLOW;
   async function GET(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
@@ -36,9 +37,9 @@ export function readRoute(run: ReadRunner) {
     return new Response(null, { status: res.status, headers: res.headers });
   }
   async function OPTIONS(): Promise<Response> {
-    return new Response(null, { status: 204, headers: { ...BASE_HEADERS, allow: ALLOW } });
+    return new Response(null, { status: 204, headers: { ...BASE_HEADERS, allow } });
   }
   const notAllowed = async (_req?: Request): Promise<Response> =>
-    errorResponse(new ApiError(405, 'method_not_allowed', 'Method not allowed', { allow: ALLOW }));
+    errorResponse(new ApiError(405, 'method_not_allowed', 'Method not allowed', { allow }));
   return { GET, HEAD, OPTIONS, POST: notAllowed, PUT: notAllowed, PATCH: notAllowed, DELETE: notAllowed };
 }
