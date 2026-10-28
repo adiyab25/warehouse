@@ -10,6 +10,28 @@
 // become string unions and array columns become typed arrays. Each table also
 // gets an `…Insert` shape where nullable and defaulted columns are optional.
 
+export interface ApiClient {
+  id: string;
+  tenant_id: string;
+  name: string;
+  token_hash: string;
+  scopes: string[];
+  active: boolean;
+  last_used_at: Date | null;
+  created_at: Date;
+}
+
+export interface ApiClientInsert {
+  id?: string;
+  tenant_id: string;
+  name: string;
+  token_hash: string;
+  scopes?: string[];
+  active?: boolean;
+  last_used_at?: Date | null;
+  created_at?: Date;
+}
+
 export interface AppUser {
   id: string;
   tenant_id: string;
@@ -278,6 +300,26 @@ export interface RequisitionInsert {
   notes?: string | null;
 }
 
+export interface Session {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  token_hash: string;
+  created_at: Date;
+  expires_at: Date;
+  revoked_at: Date | null;
+}
+
+export interface SessionInsert {
+  id?: string;
+  tenant_id: string;
+  user_id: string;
+  token_hash: string;
+  created_at?: Date;
+  expires_at: Date;
+  revoked_at?: Date | null;
+}
+
 export interface StockMovement {
   id: string;
   seq: string;
@@ -346,6 +388,7 @@ export interface TenantInsert {
 
 /** Maps a table name to its row shape. */
 export interface Database {
+  api_clients: ApiClient;
   app_users: AppUser;
   count_lines: CountLine;
   count_sessions: CountSession;
@@ -357,6 +400,7 @@ export interface Database {
   receipts: Receipt;
   requisition_lines: RequisitionLine;
   requisitions: Requisition;
+  sessions: Session;
   stock_movements: StockMovement;
   stock_snapshots: StockSnapshot;
   tenants: Tenant;
@@ -366,10 +410,11 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['api_clients', 'app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'sessions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
+  { table: 'api_clients', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'app_users', columns: 'branch_location_id', definition: "FOREIGN KEY (branch_location_id) REFERENCES locations(id)" },
   { table: 'app_users', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'count_lines', columns: 'tenant_id,count_session_id', definition: "FOREIGN KEY (tenant_id, count_session_id) REFERENCES count_sessions(tenant_id, id) ON DELETE CASCADE" },
@@ -403,6 +448,9 @@ export const foreignKeys = [
   { table: 'requisitions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'requisitions', columns: 'tenant_id,rejected_by', definition: "FOREIGN KEY (tenant_id, rejected_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'requisitions', columns: 'tenant_id,requested_by', definition: "FOREIGN KEY (tenant_id, requested_by) REFERENCES app_users(tenant_id, id)" },
+  { table: 'sessions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'sessions', columns: 'tenant_id,user_id', definition: "FOREIGN KEY (tenant_id, user_id) REFERENCES app_users(tenant_id, id)" },
+  { table: 'stock_movements', columns: 'tenant_id,actor_api_client_id', definition: "FOREIGN KEY (tenant_id, actor_api_client_id) REFERENCES api_clients(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id,actor_user_id', definition: "FOREIGN KEY (tenant_id, actor_user_id) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'stock_movements', columns: 'tenant_id,from_location_id', definition: "FOREIGN KEY (tenant_id, from_location_id) REFERENCES locations(tenant_id, id)" },
