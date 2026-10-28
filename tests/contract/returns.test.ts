@@ -28,8 +28,9 @@ import { migrateUrl, sqlTestUrl, withDb } from '../harness/sql.ts';
  *   - a return larger than the source actually holds is REFUSED, naming the
  *     location and the available quantity, and nothing is committed — a source
  *     never goes negative for stock it never had;
- *   - a retried return posts EXACTLY once (a stable, timestamp-free idempotency
- *     key), while a genuine second return with a distinct key still moves stock;
+ *   - a retried return posts EXACTLY once (an explicit per-intent idempotency
+ *     key is required), while a genuine second return with a distinct key still
+ *     moves stock, and two concurrent returns cannot drive the source negative;
  *   - a return against a RECEIVED requisition moves it `received -> returned`
  *     and the ledger shows branch -> warehouse.
  *
@@ -156,6 +157,7 @@ test('a branch return moves stock back into the warehouse', { skip: !sqlTestUrl(
         disposition: 'restock',
         refType: 'customer_return',
         refId,
+        idempotencyKey: randomUUID(),
       }),
     );
 
@@ -202,6 +204,7 @@ test('a damaged return goes to the scrap location as a write-off', { skip: !sqlT
         disposition: 'write_off',
         refType: 'damaged',
         refId: randomUUID(),
+        idempotencyKey: randomUUID(),
       }),
     );
 
@@ -237,6 +240,7 @@ test('a quarantined return is NOT back in sellable stock', { skip: !sqlTestUrl()
         disposition: 'quarantine',
         refType: 'suspect',
         refId: randomUUID(),
+        idempotencyKey: randomUUID(),
       }),
     );
 
@@ -269,6 +273,7 @@ test('a restock of sellable goods is visible again in on_hand', { skip: !sqlTest
         disposition: 'restock',
         refType: 'customer_return',
         refId: randomUUID(),
+        idempotencyKey: randomUUID(),
       }),
     );
 
@@ -342,20 +347,162 @@ test('a return against a received requisition moves it to returned', { skip: !sq
       assert.equal(mv[0]?.actor_user_id, u1, 'the required actor is written to the ledger');
     });
 
-    // `returned` is TERMINAL: a second return is refused, naming the state.
+    // IMPORTANT 4: a RETRY of the committed return (the same line) is
+    // idempotent. The requisition is already `returned` and its movement already
+    // exists, so the re-send succeeds instead of an ambiguous refusal.
+    const retried = await withTenant(db, t1, (tdb) =>
+      returnRequisition(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
+    );
+    assert.equal(retried.status, 'returned', 'a retried return is an idempotent success');
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        "select count(*)::int as n from stock_movements where variant_id = $1 and ref_type = 'REQUISITION' and from_location_id = $2",
+        [ctx.variantId, ctx.branch.id],
+      );
+      assert.equal(rows[0]!.n, 1, 'the retry did not post a second movement');
+    });
+
+    // A genuinely DIFFERENT act on a terminal document still fails — it names
+    // the state. Here the line (a variant this requisition never covered) has no
+    // movement, so it is not a retry.
     await assert.rejects(
-      () => withTenant(db, t1, (tdb) => returnRequisition(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 1 }])),
+      () =>
+        withTenant(db, t1, (tdb) =>
+          returnRequisition(tdb, req.id, u1, [{ variantId: randomUUID(), qty: 1 }]),
+        ),
       /cannot be returned.*status is 'returned'/,
-      'a returned requisition is terminal',
+      'a genuinely different return on a returned requisition is still refused',
     );
   });
 });
 
-// Review Focus #3: a retried return must post EXACTLY once. The key is derived
-// deterministically (never from a timestamp), so a retried call derives the same
-// key and lands on the same movement — while a genuine SECOND return, given a
-// DISTINCT key, still moves stock.
-test('a retried return posts once (idempotency)', { skip: !sqlTestUrl() }, async () => {
+// IMPORTANT 3: a requisition return is bounded by what THIS DOCUMENT delivered,
+// not merely by the branch's on-hand. Stock the branch holds from ANOTHER source
+// cannot be used to drive the document to `returned`.
+test('a requisition return is bounded by what the document delivered', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'REQBOUND'));
+
+    const req = await withTenant(db, t1, (tdb) =>
+      createRequisition(tdb, {
+        branchLocationId: ctx.branch.id,
+        requestedBy: u1,
+        lines: [{ variantId: ctx.variantId, requestedQty: 5 }],
+      }),
+    );
+    await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) =>
+      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+    );
+
+    // The branch ALSO holds stock from another source — 100 units the
+    // requisition never delivered.
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.branch.id, 100));
+
+    // It holds 105, so the on-hand guard alone would allow this — the DELIVERED
+    // bound is what refuses it, naming the limit.
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          returnRequisition(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 10 }]),
+        ),
+      /delivered 5\.000 .*only 5\.000 can go back/,
+      'a return bigger than the requisition delivered is refused, naming the limit',
+    );
+
+    // The refusal committed nothing: the requisition is still `received`.
+    await withTenant(db, t1, async (tdb) => {
+      const { rows: hdr } = await tdb.query<{ status: string }>(
+        'select status from requisitions where id = $1',
+        [req.id],
+      );
+      assert.equal(hdr[0]!.status, 'received', 'the refused return leaves the requisition received');
+    });
+
+    // Returning exactly what was delivered is accepted.
+    const ok = await withTenant(db, t1, (tdb) =>
+      returnRequisition(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
+    );
+    assert.equal(ok.status, 'returned', 'returning the delivered quantity is accepted');
+  });
+});
+
+// CRITICAL 1: the availability guard is SERIALISED by an advisory lock. Two
+// concurrent returns of the FULL available quantity for the same (variant,
+// branch) must not both read the same balance and both post — without the lock
+// both succeed and the branch ends at -10; with it, exactly one succeeds and the
+// branch ends at 0, never negative.
+test('concurrent returns cannot drive the source negative', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'RACE'));
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.branch.id, 10));
+
+    // Two SEPARATE connections, each with its own transaction and the tenant
+    // pinned, both attempting a return of the whole 10.
+    const c1 = new Client({ connectionString: sqlTestUrl()! });
+    const c2 = new Client({ connectionString: sqlTestUrl()! });
+    await c1.connect();
+    await c2.connect();
+    try {
+      for (const c of [c1, c2]) {
+        await c.query('begin');
+        await c.query("select set_config('app.tenant_id', $1, true)", [t1]);
+      }
+
+      const input = (key: string) => ({
+        variantId: ctx.variantId,
+        qty: 10,
+        fromLocationId: ctx.branch.id,
+        disposition: 'restock' as const,
+        idempotencyKey: key,
+      });
+
+      // Commit (or roll back a refused attempt) as soon as each settles, so
+      // whichever holds the lock releases it and the pair never deadlocks.
+      const run = (c: Client, key: string) =>
+        postReturn(c, input(key)).then(
+          async (r) => {
+            await c.query('commit');
+            return { ok: true as const, r };
+          },
+          async (e) => {
+            await c.query('rollback');
+            return { ok: false as const, e: e as Error };
+          },
+        );
+
+      const [a, b] = await Promise.all([run(c1, randomUUID()), run(c2, randomUUID())]);
+      const succeeded = [a, b].filter((x) => x.ok).length;
+      assert.equal(succeeded, 1, 'exactly one of two concurrent full returns may succeed');
+    } finally {
+      await c1.end().catch(() => {});
+      await c2.end().catch(() => {});
+    }
+
+    await withTenant(db, t1, async (tdb) => {
+      const by = await onHandBy(tdb, ctx.variantId);
+      assert.equal(
+        by[ctx.branch.id] ?? '0.000',
+        '0.000',
+        'the branch is emptied, not overdrawn — the source never goes negative',
+      );
+    });
+  });
+});
+
+// Review Focus #2: the idempotency key is REQUIRED and belongs to the CALLER,
+// one per return INTENT. A retry of the same intent (same key) posts exactly
+// ONCE, while two genuinely DIFFERENT returns of the same variant from the same
+// branch — each with its OWN key — BOTH post. There is deliberately no derived
+// fallback: a key guessed from the disposition, variant and source cannot tell
+// the two apart and would silently swallow the second.
+test('two returns with different keys both post, and the same key posts once', { skip: !sqlTestUrl() }, async () => {
   const { t1 } = await provision();
 
   await withDb(async (db) => {
@@ -363,7 +510,7 @@ test('a retried return posts once (idempotency)', { skip: !sqlTestUrl() }, async
     await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.branch.id, 5));
 
     const refId = randomUUID();
-    const input = {
+    const shared = {
       variantId: ctx.variantId,
       qty: 2,
       fromLocationId: ctx.branch.id,
@@ -372,34 +519,72 @@ test('a retried return posts once (idempotency)', { skip: !sqlTestUrl() }, async
       refId,
     };
 
-    const first = await withTenant(db, t1, (tdb) => postReturn(tdb, input));
-    const retry = await withTenant(db, t1, (tdb) => postReturn(tdb, input));
+    // The SAME key twice: one return intent, retried. It must collapse onto the
+    // first movement, not post a second.
+    const keyA = randomUUID();
+    const first = await withTenant(db, t1, (tdb) =>
+      postReturn(tdb, { ...shared, idempotencyKey: keyA }),
+    );
+    const retry = await withTenant(db, t1, (tdb) =>
+      postReturn(tdb, { ...shared, idempotencyKey: keyA }),
+    );
     assert.equal(retry.id, first.id, 'a retried return resolves to the SAME ledger movement');
 
     await withTenant(db, t1, async (tdb) => {
-      const { rows } = await tdb.query<{ n: number }>(
-        'select count(*)::int as n from stock_movements where variant_id = $1 and ref_type = $2 and ref_id = $3',
-        [ctx.variantId, 'CUSTOMER_RETURN', refId],
-      );
-      assert.equal(rows[0]!.n, 1, 'a retried return must move the stock exactly ONCE');
       const by = await onHandBy(tdb, ctx.variantId);
       assert.equal(by[ctx.warehouse.id], '2.000', 'the warehouse gained the 2 once, not twice');
     });
 
-    // A GENUINE second return of the same goods from the same place, with a
-    // distinct key, is still possible — the idempotency key must not make the
-    // second real return invisible.
-    await withTenant(db, t1, (tdb) => postReturn(tdb, { ...input, idempotencyKey: 'genuine-second-return' }));
+    // A DIFFERENT key is a genuinely different return of the same variant from
+    // the same branch — it MUST post.
+    const keyB = randomUUID();
+    const second = await withTenant(db, t1, (tdb) =>
+      postReturn(tdb, { ...shared, idempotencyKey: keyB }),
+    );
+    assert.notEqual(second.id, first.id, 'a different key is a different movement');
 
     await withTenant(db, t1, async (tdb) => {
       const { rows } = await tdb.query<{ n: number }>(
         'select count(*)::int as n from stock_movements where variant_id = $1 and ref_type = $2 and ref_id = $3',
         [ctx.variantId, 'CUSTOMER_RETURN', refId],
       );
-      assert.equal(rows[0]!.n, 2, 'a distinct key lets a genuine second return move stock');
+      assert.equal(rows[0]!.n, 2, 'two different keys post TWO movements — the second is not swallowed');
       const by = await onHandBy(tdb, ctx.variantId);
       assert.equal(by[ctx.warehouse.id], '4.000', 'both genuine returns landed');
       assert.equal(by[ctx.branch.id], '1.000', 'the branch is debited only for the two real returns');
+    });
+  });
+});
+
+// The key is mandatory: there is no derived fallback to hide a missing one.
+test('a return with no idempotency key is refused', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'NOKEY'));
+    await withTenant(db, t1, (tdb) => seed(tdb, ctx.variantId, ctx.branch.id, 2));
+
+    await assert.rejects(
+      () =>
+        withTenant(db, t1, (tdb) =>
+          postReturn(tdb, {
+            variantId: ctx.variantId,
+            qty: 1,
+            fromLocationId: ctx.branch.id,
+            disposition: 'restock',
+            idempotencyKey: '',
+          }),
+        ),
+      /idempotencyKey must be a non-empty string/,
+      'a return with no key cannot be made idempotent and must be refused',
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        'select count(*)::int as n from stock_movements where variant_id = $1 and ref_type = $2',
+        [ctx.variantId, 'CUSTOMER_RETURN'],
+      );
+      assert.equal(rows[0]!.n, 0, 'nothing may be written when the key is missing');
     });
   });
 });
@@ -425,6 +610,7 @@ test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() 
             disposition: 'restock',
             refType: 'customer_return',
             refId: randomUUID(),
+            idempotencyKey: randomUUID(),
           }),
         ),
       /only 2\.000 is on hand/,
@@ -442,6 +628,7 @@ test('a return of more than the branch holds is refused', { skip: !sqlTestUrl() 
             disposition: 'restock',
             refType: 'customer_return',
             refId: randomUUID(),
+            idempotencyKey: randomUUID(),
           }),
         ),
       /BR-OVERQ/,

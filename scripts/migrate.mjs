@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Plain-SQL migration runner.
 //
-//   DATABASE_URL=postgresql://… node scripts/migrate.mjs            # apply what is missing
-//   DATABASE_URL=postgresql://… node scripts/migrate.mjs --reset    # drop `public`, reapply everything
+//   MIGRATE_DATABASE_URL=postgresql://… node scripts/migrate.mjs           # apply what is missing
+//   MIGRATE_DATABASE_URL=postgresql://… node scripts/migrate.mjs --reset   # drop `public`, reapply everything
 //
 // Migrations are plain .sql files under supabase/migrations/, applied in
 // filename order, each in its own transaction, and recorded by filename in
@@ -10,10 +10,16 @@
 // Docker is not involved: this runner replaces `supabase db push` on machines
 // where the Supabase CLI cannot start a local stack.
 //
-// DATABASE_URL must be the database OWNER. Postgres makes whoever creates a
-// table its owner, and an owner bypasses that table's own RLS policies — so
-// running this as the non-superuser test role would make every later tenancy
-// test pass trivially. The tests assert the resulting ownership.
+// The URL is `MIGRATE_DATABASE_URL ?? DATABASE_URL`, the SAME precedence
+// `.env.example`, `scripts/gen-types.mjs` and `tests/harness/sql.ts` use — so a
+// machine that sets only the owner override migrates through it rather than
+// through whatever `DATABASE_URL` happens to hold.
+//
+// It MUST be the database OWNER. Postgres makes whoever creates a table its
+// owner, and an owner bypasses that table's own RLS policies — so running this
+// as the app role would make every table owned by it and silently defeat RLS.
+// The runner therefore REFUSES to run when it connects as `authenticated`, and
+// the tests assert the resulting ownership.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,8 +38,8 @@ function fail(message) {
   process.exit(1);
 }
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) fail('DATABASE_URL is not set');
+const connectionString = process.env.MIGRATE_DATABASE_URL ?? process.env.DATABASE_URL;
+if (!connectionString) fail('MIGRATE_DATABASE_URL (or DATABASE_URL) is not set');
 
 // Filenames are the ordering key. A name like `10_foo.sql` sorts before
 // `0009_…` lexicographically and would silently be applied out of order, so
@@ -53,6 +59,28 @@ try {
   await client.connect();
 } catch (err) {
   fail(`could not connect to the database: ${err.message}`);
+}
+
+// Refuse to migrate as the app role. Whoever creates a table owns it, and a
+// table's OWNER bypasses that table's own RLS policies — so connecting as
+// `authenticated` would leave every table owned by the app role and silently
+// defeat row-level security for every tenant at once. Detected AFTER connecting
+// (the role is a property of the connection, not the URL) so `postgres` reached
+// through any url shape is accepted and only the app role is refused.
+try {
+  const { rows } = await client.query('select current_user as role');
+  if (rows[0]?.role === 'authenticated') {
+    fail(
+      'refusing to migrate as the app role "authenticated" — whoever creates a ' +
+        'table owns it, and a table owner bypasses its own RLS, so every table ' +
+        'would end up owned by the app role and row-level security would be ' +
+        'silently defeated. Point MIGRATE_DATABASE_URL (or DATABASE_URL) at the ' +
+        'database OWNER url.',
+    );
+  }
+} catch (err) {
+  await client.end().catch(() => {});
+  fail(`could not read the connection role: ${err.message}`);
 }
 
 try {

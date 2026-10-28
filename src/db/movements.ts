@@ -173,6 +173,41 @@ export async function postMovement(
 }
 
 /**
+ * Serialises every writer that guards the availability of ONE (variant,
+ * location) pair, so a read of `on_hand` and the movement that changes it
+ * cannot interleave.
+ *
+ * A plain `select … from on_hand` takes NO lock (a view cannot), and reading the
+ * balance and then posting against it is a lost-update race: two returns of the
+ * same stock each read the same balance, each decide it fits, and both post —
+ * driving the location negative. The fix is a transaction-scoped advisory lock
+ * on a key derived from the pair, taken BEFORE the availability read. It must be
+ * the SAME key at every call site so writers on the same pair actually block
+ * each other.
+ *
+ * The key is `hashtextextended(variantId || ':' || locationId, 0)` — the
+ * transaction-scoped form, so the lock is released automatically at COMMIT or
+ * ROLLBACK and a crashed connection cannot wedge a pair. The UUID ids make a
+ * cross-tenant collision impossible in practice: two tenants never share a
+ * variant or location id. Deliberately NOT `SELECT … FOR UPDATE` on `on_hand`
+ * (proven to acquire no row lock, so it serialises nothing) and NOT an app-side
+ * mutex (which a second process ignores).
+ *
+ * Call it with the scoped `db` from inside `withTenant`, before reading the
+ * pair's availability.
+ */
+export async function lockStockPair(
+  db: Queryable,
+  variantId: string,
+  locationId: string,
+): Promise<void> {
+  await db.query(
+    `select pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))`,
+    [variantId, locationId],
+  );
+}
+
+/**
  * The derived on-hand quantity per (variant, location), straight from the
  * `on_hand` view — the signed sum of the ledger. Optional `variantId` /
  * `locationId` narrow it.

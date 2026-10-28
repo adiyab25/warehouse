@@ -1,7 +1,7 @@
 import { allowedTransitions, canConfirm, type RequisitionStatus } from '../domain/requisition.ts';
 import type { Queryable } from './client.ts';
 import { transitLocation, warehouseLocation } from './locations.ts';
-import { postMovement } from './movements.ts';
+import { postMovement, lockStockPair } from './movements.ts';
 import type { Requisition, RequisitionLine } from './types.ts';
 
 // Re-export the GENERATED row types rather than hand-declaring copies. The
@@ -290,6 +290,11 @@ export async function issue(
     // The key is built from the CUMULATIVE issued quantity this leg produces, so
     // it is deterministic and collision-free across legs (see the docstring).
     const issuedAfter = round3(stored.issuedQty + qty);
+
+    // Serialise with every other guarded writer on this (variant, warehouse)
+    // pair before the warehouse is debited, so an issue and a restock return of
+    // the same variant cannot interleave on the warehouse's balance.
+    await lockStockPair(db, line.variantId, warehouse.id);
 
     await postMovement(db, {
       variantId: line.variantId,

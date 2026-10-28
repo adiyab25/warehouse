@@ -9,16 +9,18 @@ import { REPO_ROOT, migrateUrl, sqlTestUrl } from './harness/sql.ts';
 /**
  * Runs the migration runner with the OWNER url.
  *
- * `scripts/migrate.mjs` reads `DATABASE_URL`. Pointing that at the test role
+ * `scripts/migrate.mjs` reads `MIGRATE_DATABASE_URL ?? DATABASE_URL`, so both
+ * are pinned to the owner url here — pointing the runner at the app role
  * (`authenticated`) is the bug this file guards against: Postgres makes the
  * creator of a table its owner, and a table's owner bypasses that table's own
  * RLS policies — so every table from later tasks would silently end up owned
- * by `authenticated` and every tenancy test would pass trivially.
+ * by `authenticated` and every tenancy test would pass trivially. The runner
+ * itself now refuses the app role too (see the refusal test below).
  */
 function runMigrate(...args: string[]): string {
   return execFileSync(process.execPath, ['scripts/migrate.mjs', ...args], {
     cwd: REPO_ROOT,
-    env: { ...process.env, DATABASE_URL: migrateUrl()! },
+    env: { ...process.env, MIGRATE_DATABASE_URL: migrateUrl()!, DATABASE_URL: migrateUrl()! },
     encoding: 'utf8',
   });
 }
@@ -80,5 +82,33 @@ test('the runner owns schema_migrations as postgres, never as authenticated', { 
     r.rows[0].owner,
     'postgres',
     `public.schema_migrations must be owned by the superuser "postgres", got "${r.rows[0].owner}"`,
+  );
+});
+
+// The runner's own refusal: pointed at the app role it must FAIL LOUDLY, before
+// it can create a single object owned by `authenticated`. This is the belt to
+// the ownership test's braces — the ownership test catches the damage after the
+// fact; this one proves the runner will not do it at all.
+test('the runner refuses to migrate as the app role', { skip: !migrateUrl() || !sqlTestUrl() }, async () => {
+  let exitCode = 0;
+  let output = '';
+  try {
+    execFileSync(process.execPath, ['scripts/migrate.mjs'], {
+      cwd: REPO_ROOT,
+      // The app-role url is staged as the owner override, so a runner that
+      // trusted MIGRATE_DATABASE_URL blindly would proceed as `authenticated`.
+      env: { ...process.env, MIGRATE_DATABASE_URL: sqlTestUrl()! },
+      encoding: 'utf8',
+    });
+  } catch (err) {
+    exitCode = (err as { status?: number }).status ?? -1;
+    output = `${(err as { stdout?: string }).stdout ?? ''}${(err as { stderr?: string }).stderr ?? ''}`;
+  }
+
+  assert.notEqual(exitCode, 0, 'migrating as the app role must exit non-zero');
+  assert.match(
+    output,
+    /refusing to migrate as the app role/,
+    'the refusal must name the app role it refuses to migrate as',
   );
 });

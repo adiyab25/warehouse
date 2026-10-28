@@ -53,14 +53,19 @@ echo "grant usage, create on schema public, auth, extensions to authenticated;
   | /c/Workspace/pg/pgsql/bin/psql.exe
 ```
 
-Copy `.env.example` to `.env`. Note that `DATABASE_URL` (what migrations run as)
-and `SQL_TEST_DATABASE_URL` (what tests connect as) are deliberately different
-roles.
+Copy `.env.example` to `.env`. Migrations run as `MIGRATE_DATABASE_URL` (falling
+back to `DATABASE_URL`) — the database OWNER; the tests connect as
+`SQL_TEST_DATABASE_URL` — the non-superuser `authenticated` role. They are
+deliberately different roles. `scripts/migrate.mjs` reads the owner url first and
+**refuses to run** if it connects as `authenticated`: whoever creates a table
+owns it, and a table owner bypasses its own RLS, so migrating as the app role
+would leave every table owned by `authenticated` and silently defeat row-level
+security.
 
 ### Running
 
 ```bash
-npm run db:migrate   # apply every unapplied supabase/migrations/*.sql
+npm run db:migrate   # apply every unapplied supabase/migrations/*.sql (as MIGRATE_DATABASE_URL / DATABASE_URL, the owner)
 npm run db:reset     # drop schema public and reapply everything (dev only, owner role)
 npm run db:check     # server version, schemas, applied migrations
 npm test             # node:test via tsx; DB tests are skipped without SQL_TEST_DATABASE_URL
