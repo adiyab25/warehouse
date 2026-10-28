@@ -54,6 +54,7 @@ export type ReplenishmentOutcome =
     }
   | { ok: false; error: ReportRefusal };
 
+// NOTE: if a `days` URL parameter is ever added it MUST be validated into a coded 'invalid' refusal before reaching this function (assertDays throws a plain Error).
 export async function getReplenishmentReport(
   db: Queryable,
   cookie: string | undefined | null,

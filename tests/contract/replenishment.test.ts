@@ -355,3 +355,126 @@ test('the list is bounded and says when it was cut', opts, async () => {
     });
   });
 });
+
+/**
+ * TIME WINDOW + RETIRED VARIANTS (review fixes). Backdated movements pin the
+ * `occurred_at >= now() - days` condition; days are kept far from the boundary
+ * (5/29 inside a 30-day window, 31/40 outside) so nothing flaky near midnight.
+ */
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
+async function freshTenant(tag: string) {
+  const owner = new Client({ connectionString: migrateUrl()! });
+  await owner.connect();
+  const loc: Record<string, string> = {};
+  let t = '';
+  let actor = '';
+  try {
+    t = (await owner.query<{ id: string }>('insert into tenants (name) values ($1) returning id', [`Window ${tag}`])).rows[0]!.id;
+    provisioned.push(t);
+    for (const [k, type] of [['wh', 'warehouse'], ['br', 'branch'], ['tr', 'transit']] as const) {
+      loc[k] = (
+        await owner.query<{ id: string }>(
+          'insert into locations (tenant_id, code, name_ar, type) values ($1, $2, $3, $4) returning id',
+          [t, `${k.toUpperCase()}-${tag.toUpperCase()}`, `${k} ${tag}`, type],
+        )
+      ).rows[0]!.id;
+    }
+    actor = (
+      await owner.query<{ id: string }>(
+        `insert into app_users (tenant_id, name, name_normalised, username, role, password_hash)
+         values ($1, 'W', public.normalise_name('W'), $2, 'owner', 'x') returning id`,
+        [t, `w_${tag}`],
+      )
+    ).rows[0]!.id;
+  } finally {
+    await owner.end();
+  }
+  return { t, loc, actor };
+}
+
+test('the rate honours its time window: backdated branch consumption', opts, async () => {
+  const { t, loc, actor } = await freshTenant('wb');
+  await withDb(async (db) => {
+    await withTenant(db, t, async (tdb) => {
+      const it = await createItem(tdb, { nameAr: 'نافذة', family: 'sellable', costEgp: 1, sku: 'WIN-0001', barcode: 'WIN-0001' });
+      await setLocationLevel(tdb, { itemId: it.item.id, locationId: loc.br!, minQty: 1000, maxQty: 2000 });
+      const v = it.variant.id;
+      await postMovement(tdb, { variantId: v, qty: 2000, reason: 'opening_balance', toLocationId: loc.br!, actorUserId: actor, occurredAt: daysAgo(60) });
+      for (const [qty, d] of [[10, 5], [20, 29], [700, 31], [500, 40]] as const) {
+        await postMovement(tdb, { variantId: v, qty, reason: 'consumption', fromLocationId: loc.br!, actorUserId: actor, occurredAt: daysAgo(d) });
+      }
+      const rate = (days: number) => consumptionRate(tdb, { itemId: it.item.id, locationId: loc.br!, days });
+      assert.equal(await rate(30), 1, '(10+20)/30; the 31- and 40-day-old movements are outside');
+      assert.equal(await rate(60), 20.5, '1230/60: a wider window takes the older ones in');
+      assert.equal(await rate(7), 10 / 7, 'only the 5-day-old movement');
+      const row = (await belowMinimum(tdb, { days: 30 })).find((r) => r.itemId === it.item.id)!;
+      assert.equal(row.ratePerDay, '1.000');
+      assert.equal(row.onHand, '770.000');
+      assert.equal(row.coverDays, '770.0', 'cover uses the windowed rate');
+      const wide = (await belowMinimum(tdb, { days: 60 })).find((r) => r.itemId === it.item.id)!;
+      assert.equal(wide.ratePerDay, '20.500');
+      assert.equal(wide.coverDays, '37.6');
+    });
+  });
+});
+
+test('the plan case: 60 units spread inside a 30-day window is a rate of 2', opts, async () => {
+  const { t, loc, actor } = await freshTenant('wp');
+  await withDb(async (db) => {
+    await withTenant(db, t, async (tdb) => {
+      const it = await createItem(tdb, { nameAr: 'خطة', family: 'sellable', costEgp: 1, sku: 'WIN-0002', barcode: 'WIN-0002' });
+      const v = it.variant.id;
+      await postMovement(tdb, { variantId: v, qty: 100, reason: 'opening_balance', toLocationId: loc.br!, actorUserId: actor, occurredAt: daysAgo(50) });
+      for (const d of [2, 10, 20]) {
+        await postMovement(tdb, { variantId: v, qty: 20, reason: 'consumption', fromLocationId: loc.br!, actorUserId: actor, occurredAt: daysAgo(d) });
+      }
+      assert.equal(await consumptionRate(tdb, { itemId: it.item.id, locationId: loc.br!, days: 30 }), 2);
+    });
+  });
+});
+
+test('the rate honours its time window: backdated warehouse arrival leg', opts, async () => {
+  const { t, loc, actor } = await freshTenant('ww');
+  await withDb(async (db) => {
+    await withTenant(db, t, async (tdb) => {
+      const it = await createItem(tdb, { nameAr: 'مخزن', family: 'sellable', costEgp: 1, sku: 'WIN-0003', barcode: 'WIN-0003' });
+      await setLocationLevel(tdb, { itemId: it.item.id, locationId: loc.wh!, minQty: 5000, maxQty: 9000 });
+      const v = it.variant.id;
+      await postMovement(tdb, { variantId: v, qty: 3000, reason: 'opening_balance', toLocationId: loc.wh!, actorUserId: actor, occurredAt: daysAgo(70) });
+      for (const [qty, d] of [[10, 5], [20, 29], [700, 31], [500, 40]] as const) {
+        await postMovement(tdb, { variantId: v, qty, reason: 'issue_to_branch', fromLocationId: loc.wh!, toLocationId: loc.tr!, actorUserId: actor, occurredAt: daysAgo(d + 0.5) });
+        await postMovement(tdb, { variantId: v, qty, reason: 'issue_to_branch', fromLocationId: loc.tr!, toLocationId: loc.br!, actorUserId: actor, occurredAt: daysAgo(d) });
+      }
+      const rate = (days: number) => consumptionRate(tdb, { itemId: it.item.id, locationId: loc.wh!, days });
+      assert.equal(await rate(30), 1, 'arrival legs only, inside the window, counted once');
+      assert.equal(await rate(60), 20.5);
+      const row = (await belowMinimum(tdb, { days: 30 })).find((r) => r.itemId === it.item.id)!;
+      assert.equal(row.ratePerDay, '1.000');
+      assert.equal((await belowMinimum(tdb, { days: 60 })).find((r) => r.itemId === it.item.id)!.ratePerDay, '20.500');
+    });
+  });
+});
+
+test('a product whose variants are all inactive raises no alert; active variants alone are counted', opts, async () => {
+  const { t, loc, actor } = await freshTenant('wr');
+  await withDb(async (db) => {
+    await withTenant(db, t, async (tdb) => {
+      const mk = (n: number) =>
+        createItem(tdb, { nameAr: `متغير ${n}`, family: 'sellable', costEgp: 1, sku: `WIN-1${n}`, barcode: `WIN-1${n}` });
+      const dead = await mk(1);
+      const live = await mk(2);
+      for (const x of [dead, live]) {
+        await setLocationLevel(tdb, { itemId: x.item.id, locationId: loc.br!, minQty: 5, maxQty: 50 });
+        await postMovement(tdb, { variantId: x.variant.id, qty: 2, reason: 'opening_balance', toLocationId: loc.br!, actorUserId: actor });
+      }
+      const before = await belowMinimum(tdb, { days: 30 });
+      assert.ok(before.find((r) => r.itemId === dead.item.id), 'sanity: listed while its variant is active');
+      await tdb.query('update item_variants set active = false where item_id = $1', [dead.item.id]);
+      const after = await belowMinimum(tdb, { days: 30 });
+      assert.equal(after.find((r) => r.itemId === dead.item.id), undefined, 'nobody can scan or restock it: no alert');
+      const l = after.find((r) => r.itemId === live.item.id);
+      assert.equal(l?.onHand, '2.000', 'an item with an active variant is still listed');
+    });
+  });
+});

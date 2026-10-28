@@ -141,6 +141,7 @@ export async function belowMinimum(db: Queryable, options: BelowMinimumOptions =
             where v.item_id = ll.item_id and v.active and o.location_id = ll.location_id
          ) oh on true
         where ll.min_qty is not null
+          and exists (select 1 from item_variants av where av.item_id = ll.item_id and av.active)
           and l.type in ${POLICY_TYPES}
           and ($1::uuid is null or ll.location_id = $1)
           and coalesce(oh.qty, 0) <= ll.min_qty
