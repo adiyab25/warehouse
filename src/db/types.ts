@@ -174,6 +174,60 @@ export interface ReceiptInsert {
   created_at?: Date;
 }
 
+export interface RequisitionLine {
+  id: string;
+  tenant_id: string;
+  requisition_id: string;
+  variant_id: string;
+  requested_qty: string;
+  approved_qty: string | null;
+  issued_qty: string;
+  received_qty: string;
+  status: 'open' | 'rejected' | 'fulfilled' | 'short';
+}
+
+export interface RequisitionLineInsert {
+  id?: string;
+  tenant_id: string;
+  requisition_id: string;
+  variant_id: string;
+  requested_qty: string;
+  approved_qty?: string | null;
+  issued_qty?: string;
+  received_qty?: string;
+  status?: 'open' | 'rejected' | 'fulfilled' | 'short';
+}
+
+export interface Requisition {
+  id: string;
+  tenant_id: string;
+  branch_location_id: string;
+  status: 'requested' | 'approved' | 'partially_issued' | 'issued' | 'received' | 'closed' | 'rejected' | 'returned';
+  requested_by: string;
+  requested_at: Date;
+  approved_by: string | null;
+  approved_at: Date | null;
+  issued_at: Date | null;
+  received_at: Date | null;
+  closed_at: Date | null;
+  notes: string | null;
+}
+
+export interface RequisitionInsert {
+  id?: string;
+  tenant_id: string;
+  branch_location_id: string;
+  status?: 'requested' | 'approved' | 'partially_issued' | 'issued' | 'received' | 'closed' | 'rejected' | 'returned';
+  requested_by: string;
+  requested_at?: Date;
+  approved_by?: string | null;
+  approved_at?: Date | null;
+  issued_at?: Date | null;
+  received_at?: Date | null;
+  closed_at?: Date | null;
+  notes?: string | null;
+}
+
 export interface StockMovement {
   id: string;
   seq: string;
@@ -249,6 +303,8 @@ export interface Database {
   locations: Location;
   receipt_lines: ReceiptLine;
   receipts: Receipt;
+  requisition_lines: RequisitionLine;
+  requisitions: Requisition;
   stock_movements: StockMovement;
   stock_snapshots: StockSnapshot;
   tenants: Tenant;
@@ -258,7 +314,7 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['app_users', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
@@ -279,6 +335,13 @@ export const foreignKeys = [
   { table: 'receipts', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'receipts', columns: 'tenant_id,received_by', definition: "FOREIGN KEY (tenant_id, received_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'receipts', columns: 'tenant_id,source_location_id', definition: "FOREIGN KEY (tenant_id, source_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'requisition_lines', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'requisition_lines', columns: 'tenant_id,requisition_id', definition: "FOREIGN KEY (tenant_id, requisition_id) REFERENCES requisitions(tenant_id, id) ON DELETE CASCADE" },
+  { table: 'requisition_lines', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
+  { table: 'requisitions', columns: 'tenant_id,approved_by', definition: "FOREIGN KEY (tenant_id, approved_by) REFERENCES app_users(tenant_id, id)" },
+  { table: 'requisitions', columns: 'tenant_id,branch_location_id', definition: "FOREIGN KEY (tenant_id, branch_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'requisitions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'requisitions', columns: 'tenant_id,requested_by', definition: "FOREIGN KEY (tenant_id, requested_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id,actor_user_id', definition: "FOREIGN KEY (tenant_id, actor_user_id) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'stock_movements', columns: 'tenant_id,from_location_id', definition: "FOREIGN KEY (tenant_id, from_location_id) REFERENCES locations(tenant_id, id)" },
