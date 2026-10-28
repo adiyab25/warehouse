@@ -113,7 +113,7 @@ export interface StockListResult {
  * the viewer is looking at. A branch user with no branch is refused (`invalid`),
  * exactly as the requisition screens refuse one.
  */
-async function resolveScope(db: Queryable, cookie: string | undefined | null): Promise<StockScope> {
+export async function resolveScope(db: Queryable, cookie: string | undefined | null): Promise<StockScope> {
   const user = await currentUser(db, cookie);
   if (!user) {
     throw new StockError('unauthenticated', 'Stock: you are not signed in (or the session has ended).');

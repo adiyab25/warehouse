@@ -163,5 +163,22 @@
   "stock.usage.qty": "Issued quantity",
   "stock.usage.total": "Total",
   "stock.usage.empty": "Nothing was issued to branches in this window.",
-  "stock.usage.truncated": "Showing the first {count} rows — narrow the window to see beyond this."
+  "stock.usage.truncated": "Showing the first {count} rows — narrow the window to see beyond this.",
+  "reports.heading": "Replenishment: items at or below minimum",
+  "reports.subtitle": "For each branch, the items whose balance is at or below the minimum, lowest cover first.",
+  "reports.window_note": "Consumption rate is averaged over the last {days} days. Goods in transit are not counted in a branch's balance.",
+  "reports.branch_scope": "This screen shows your branch only: {branch}",
+  "reports.empty": "Nothing is below minimum.",
+  "reports.col.item": "Item",
+  "reports.col.on_hand": "On hand",
+  "reports.col.min": "Minimum",
+  "reports.col.rate": "Per day",
+  "reports.col.cover": "Cover (days)",
+  "reports.cover.none": "Not enough history",
+  "reports.rate.none": "—",
+  "reports.truncated": "Showing the first {count} rows — there is more beyond this limit.",
+  "reports.error.unauthenticated": "Your session has ended. Sign in again.",
+  "reports.error.forbidden": "The replenishment report is for the warehouse and an authorised branch only.",
+  "reports.error.invalid": "Your account is not assigned to a branch, so there is nothing to show. Ask an administrator.",
+  "reports.back": "Home"
 }

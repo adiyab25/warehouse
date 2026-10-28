@@ -50,5 +50,5 @@ export const config = {
   // there a cookie"; the PAGE and the ACTION remain the real gate (they resolve a
   // LIVE session and the role), which is why widening here is a belt-and-braces
   // change, not a permission.
-  matcher: ['/', '/intake/:path*', '/requisitions/:path*', '/stock/:path*'],
+  matcher: ['/', '/intake/:path*', '/requisitions/:path*', '/stock/:path*', '/reports/:path*'],
 };

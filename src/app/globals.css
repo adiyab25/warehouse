@@ -652,3 +652,46 @@ p[role="alert"] {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/*
+ * THE REPLENISHMENT REPORT (Task 16) — one table per branch. Layout only: a fixed
+ * table layout keeps four columns inside a 390px phone, and every cell that holds a
+ * catalogue string carries `min-width: 0` + `overflow-wrap: anywhere`.
+ */
+.replenishment-branch {
+  margin-block: 1.25rem;
+  min-width: 0;
+}
+
+.replenishment-branch-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.replenishment-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.replenishment-table th,
+.replenishment-table td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--field-border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.replenishment-table .replenishment-item {
+  width: 40%;
+}
+
+.replenishment-rate {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -167,5 +167,22 @@
   "stock.usage.qty": "الكمية المصروفة",
   "stock.usage.total": "الإجمالي",
   "stock.usage.empty": "لا يوجد صرف إلى الفروع في هذه الفترة.",
-  "stock.usage.truncated": "يُعرض أول {count} سطر — ضيّق الفترة لعرض ما بعدها."
+  "stock.usage.truncated": "يُعرض أول {count} سطر — ضيّق الفترة لعرض ما بعدها.",
+  "reports.heading": "التزويد: أصناف عند الحد الأدنى أو أقل",
+  "reports.subtitle": "لكل فرع، الأصناف التي رصيدها عند الحد الأدنى أو دونه، الأقل تغطية أولاً.",
+  "reports.window_note": "معدل الصرف محسوب على آخر {days} يوم. البضاعة في الطريق لا تُحسب من رصيد الفرع.",
+  "reports.branch_scope": "تعرض الشاشة فرعك فقط: {branch}",
+  "reports.empty": "لا يوجد صنف تحت الحد الأدنى.",
+  "reports.col.item": "الصنف",
+  "reports.col.on_hand": "الرصيد",
+  "reports.col.min": "الحد الأدنى",
+  "reports.col.rate": "الصرف اليومي",
+  "reports.col.cover": "التغطية (أيام)",
+  "reports.cover.none": "لا توجد بيانات كافية",
+  "reports.rate.none": "—",
+  "reports.truncated": "يُعرض أول {count} سطر — يوجد المزيد بعد هذا الحد.",
+  "reports.error.unauthenticated": "انتهت الجلسة. سجّل الدخول من جديد.",
+  "reports.error.forbidden": "تقرير التزويد متاح للمخزن وللفرع المصرّح له فقط.",
+  "reports.error.invalid": "حسابك غير مرتبط بفرع، فلا يوجد ما يُعرض. راجع المسؤول.",
+  "reports.back": "الرئيسية"
 }
