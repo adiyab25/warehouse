@@ -163,6 +163,19 @@ export function RequisitionDetailScreen({
     Object.fromEntries(lines.map((line) => [line.variantId, String(line.inTransit)])),
   );
 
+  // RE-SEED WHEN THE STATE MOVES, WITHOUT REMOUNTING. After a flow the page
+  // refreshes and this screen receives NEW lines; the typed quantities must
+  // follow (they are now the remainder / what is still on the road) while the
+  // "landed" banner the person is reading must NOT be thrown away by a remount.
+  // Adjusting state during render is React's own pattern for exactly this.
+  const signature = lines.map((line) => `${line.variantId}:${line.issuedQty}:${line.receivedQty}`).join('|');
+  const [seenSignature, setSeenSignature] = useState(signature);
+  if (signature !== seenSignature) {
+    setSeenSignature(signature);
+    setIssueQty(Object.fromEntries(lines.map((line) => [line.variantId, String(line.remainingToIssue)])));
+    setConfirmQty(Object.fromEntries(lines.map((line) => [line.variantId, String(line.inTransit)])));
+  }
+
   const issueable = lines.filter((line) => line.remainingToIssue > 0);
   const confirmable = lines.filter((line) => line.inTransit > 0);
 
@@ -322,7 +335,7 @@ export function RequisitionDetailScreen({
 
               {actions.canIssue && line.remainingToIssue > 0 ? (
                 <label className="req-qty">
-                  {t('requisitions.action.issue')}
+                  {t('requisitions.line.release_qty')}
                   <input
                     type="number"
                     inputMode="numeric"
@@ -339,7 +352,7 @@ export function RequisitionDetailScreen({
 
               {actions.canConfirm && line.inTransit > 0 ? (
                 <label className="req-qty">
-                  {t('requisitions.action.confirm')}
+                  {t('requisitions.line.receive_qty')}
                   <input
                     type="number"
                     inputMode="numeric"

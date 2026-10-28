@@ -50,9 +50,6 @@ export default async function RequisitionPage({ params }: { params: Promise<{ id
       <h1>{t('requisitions.detail.heading')}</h1>
       {detail.ok ? (
         <RequisitionDetailScreen
-          key={`${detail.id}:${detail.status}:${detail.lines
-            .map((line) => `${line.issuedQty}/${line.receivedQty}`)
-            .join(',')}`}
           id={detail.id}
           status={detail.status}
           branchNameAr={detail.branchNameAr}

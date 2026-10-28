@@ -79,6 +79,8 @@
   "requisitions.line.received": "المستلَم",
   "requisitions.line.in_transit": "في الطريق: {count}",
   "requisitions.line.remaining": "المتبقّي للإصدار: {count}",
+  "requisitions.line.release_qty": "الكمية للإصدار",
+  "requisitions.line.receive_qty": "الكمية المستلَمة",
   "requisitions.action.approve": "موافقة",
   "requisitions.action.approving": "جارٍ الموافقة…",
   "requisitions.action.issue": "إصدار",

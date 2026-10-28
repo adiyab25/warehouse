@@ -75,6 +75,8 @@
   "requisitions.line.received": "Received",
   "requisitions.line.in_transit": "In transit: {count}",
   "requisitions.line.remaining": "Still to release: {count}",
+  "requisitions.line.release_qty": "Quantity to release",
+  "requisitions.line.receive_qty": "Quantity received",
   "requisitions.action.approve": "Approve",
   "requisitions.action.approving": "Approving…",
   "requisitions.action.issue": "Issue",
