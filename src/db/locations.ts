@@ -104,6 +104,110 @@ export async function transitLocation(db: Queryable): Promise<Location> {
 }
 
 /**
+ * The code of the tenant's singleton QUARANTINE location — the pseudo-location
+ * stock belongs to while it is held back from sale pending a decision. Unique
+ * per tenant, so {@link quarantineLocation} can resolve it with an upsert.
+ */
+export const QUARANTINE_CODE = 'QUARANTINE';
+
+/**
+ * The code of the tenant's singleton SCRAP location — where damaged goods are
+ * written off to. Unique per tenant, so {@link scrapLocation} can resolve it
+ * with an upsert.
+ */
+export const SCRAP_CODE = 'SCRAP';
+
+/**
+ * Returns the tenant's singleton quarantine location, creating it if it is
+ * missing.
+ *
+ * Mirrors {@link transitLocation} EXACTLY — same upsert-on-conflict-then-select
+ * shape, same per-tenant `unique (tenant_id, code)` that makes the two racing
+ * callers safe, same select-by-CODE-alone so an occupied code names the real
+ * cause. Quarantine is where stock that is BACK but NOT sellable goes: it is a
+ * location so the ledger can prove it (the stock left the branch, it is simply
+ * not yet saleable), which is why quarantining a return is a movement and not a
+ * silence. Created on demand like transit — per-tenant, never seeded by a
+ * migration. Call it with the scoped `db` from inside `withTenant`.
+ *
+ * Called OUTSIDE a `withTenant` scope it fails with Postgres `42501 new row
+ * violates row-level security policy for table "locations"` — identical to a
+ * genuine cross-tenant insert attempt; callers must open a tenant scope first.
+ */
+export async function quarantineLocation(db: Queryable): Promise<Location> {
+  await db.query(
+    `insert into locations (tenant_id, code, name_ar, name_en, type)
+     values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, $3, 'quarantine')
+     on conflict (tenant_id, code) do nothing`,
+    [QUARANTINE_CODE, 'الحجر', 'Quarantine'],
+  );
+
+  // Select by CODE alone (not `type = 'quarantine'`): if the code is already
+  // taken by another type, the `on conflict do nothing` above swallowed the
+  // insert and a `type = 'quarantine'` filter would find nothing — reporting a
+  // missing row when the real cause is an occupied code.
+  const { rows } = await db.query<Location>(
+    `select *
+       from locations
+      where code = $1
+        and tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
+    [QUARANTINE_CODE],
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error(
+      `quarantineLocation: quarantine location missing after insert (code ${QUARANTINE_CODE})`,
+    );
+  }
+  if (row.type !== 'quarantine') {
+    throw new Error(
+      `quarantineLocation: code ${QUARANTINE_CODE} is occupied by a ${row.type} location, not the quarantine location`,
+    );
+  }
+  return row;
+}
+
+/**
+ * Returns the tenant's singleton scrap location, creating it if it is missing.
+ *
+ * The write-off destination — damaged goods that are never coming back to
+ * sellable stock. Mirrors {@link transitLocation} and {@link quarantineLocation}
+ * EXACTLY (upsert on `(tenant_id, code)`, then select by code alone), for the
+ * same reasons. Created on demand, per-tenant, never seeded by a migration. Call
+ * it with the scoped `db` from inside `withTenant`.
+ */
+export async function scrapLocation(db: Queryable): Promise<Location> {
+  await db.query(
+    `insert into locations (tenant_id, code, name_ar, name_en, type)
+     values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, $3, 'scrap')
+     on conflict (tenant_id, code) do nothing`,
+    [SCRAP_CODE, 'التالف', 'Scrap'],
+  );
+
+  const { rows } = await db.query<Location>(
+    `select *
+       from locations
+      where code = $1
+        and tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
+    [SCRAP_CODE],
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error(
+      `scrapLocation: scrap location missing after insert (code ${SCRAP_CODE})`,
+    );
+  }
+  if (row.type !== 'scrap') {
+    throw new Error(
+      `scrapLocation: code ${SCRAP_CODE} is occupied by a ${row.type} location, not the scrap location`,
+    );
+  }
+  return row;
+}
+
+/**
  * Returns the tenant's warehouse location — the ONE source stock is issued FROM.
  *
  * A requisition names the BRANCH it is for, not the warehouse it draws from
