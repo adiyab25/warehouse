@@ -117,6 +117,17 @@ test('the variant label route returns image/svg+xml for a real variant', { skip:
       /^image\/svg\+xml/,
       'the media type is image/svg+xml',
     );
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(
+      response.headers.get('x-content-type-options'),
+      'nosniff',
+      'the SVG must not be sniffed as another type',
+    );
+    assert.equal(
+      response.headers.get('content-disposition'),
+      'inline; filename="label-SH-0001.svg"',
+      'the label downloads with a filename derived from its code',
+    );
 
     const body = await response.text();
     assert.match(body, /^<svg /, 'the body is an SVG document');
@@ -212,6 +223,95 @@ test('an unknown variant id is a 404, not an empty label', { skip: !sqlTestUrl()
     );
     assert.equal(response.status, 404, 'an unknown id must be a 404, not a 200 with an empty sticker');
     assert.doesNotMatch(String(response.headers.get('content-type')), /svg/, 'no SVG body on a 404');
+  } finally {
+    restore();
+  }
+});
+
+test('an empty id is a 401 for an anonymous caller, not a 400', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+  const restore = configureDeployment(t1);
+  try {
+    // The GATE comes first: an anonymous caller must not be able to tell an
+    // empty id (400) from a well-formed one (401) — that is a shape oracle.
+    const anon = await getVariantLabel(labelRequest('/api/labels/variant/'), {
+      params: Promise.resolve({ variantId: '' }),
+    });
+    assert.equal(anon.status, 401, 'an empty id from an anonymous caller must be 401');
+
+    const anonLocation = await getLocationLabel(labelRequest('/api/labels/location/'), {
+      params: Promise.resolve({ locationId: '' }),
+    });
+    assert.equal(anonLocation.status, 401, 'the location route gates before the id too');
+
+    // With a session, an empty id IS a 400 (the caller is now identified).
+    const token = await withDb(async (db) =>
+      (await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }))).token,
+    );
+    const authed = await getVariantLabel(labelRequest('/api/labels/variant/', token), {
+      params: Promise.resolve({ variantId: '' }),
+    });
+    assert.equal(authed.status, 400, 'a signed-in caller with an empty id gets a 400');
+  } finally {
+    restore();
+  }
+});
+
+test('a barcode too long to print is a 400, not a clipped label', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+  const restore = configureDeployment(t1);
+  try {
+    const { variantId, token } = await withDb(async (db) => {
+      const created = await withTenant(db, t1, (tdb) =>
+        createItem(tdb, {
+          nameAr: 'منتج طويل',
+          family: 'sellable',
+          sku: 'PRODUCTPREFIX-00000042',
+          barcode: 'PRODUCTPREFIX-00000042',
+        }),
+      );
+      const session = await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }));
+      return { variantId: created.variant.id, token: session.token };
+    });
+
+    const response = await getVariantLabel(
+      labelRequest(`/api/labels/variant/${variantId}`, token),
+      { params: Promise.resolve({ variantId }) },
+    );
+    assert.equal(response.status, 400, 'a code that cannot be shown in full must be refused');
+    assert.doesNotMatch(String(response.headers.get('content-type')), /svg/, 'no SVG on a 400');
+  } finally {
+    restore();
+  }
+});
+
+test('two distinct variants produce two distinct labels', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+  const restore = configureDeployment(t1);
+  try {
+    const { aId, bId, token } = await withDb(async (db) => {
+      const a = await withTenant(db, t1, (tdb) =>
+        createItem(tdb, { nameAr: 'قميص', family: 'sellable', sku: 'AB-0012', barcode: 'AB-0012' }),
+      );
+      const b = await withTenant(db, t1, (tdb) =>
+        createItem(tdb, { nameAr: 'بنطلون', family: 'sellable', sku: 'XY-9999', barcode: 'XY-9999' }),
+      );
+      const session = await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }));
+      return { aId: a.variant.id, bId: b.variant.id, token: session.token };
+    });
+
+    const [a, b] = await Promise.all([
+      getVariantLabel(labelRequest(`/api/labels/variant/${aId}`, token), {
+        params: Promise.resolve({ variantId: aId }),
+      }),
+      getVariantLabel(labelRequest(`/api/labels/variant/${bId}`, token), {
+        params: Promise.resolve({ variantId: bId }),
+      }),
+    ]);
+    const [aBody, bBody] = [await a.text(), await b.text()];
+    assert.notEqual(aBody, bBody, 'distinct variants must not render byte-identical labels');
+    assert.match(aBody, /AB-0012/);
+    assert.match(bBody, /XY-9999/);
   } finally {
     restore();
   }
