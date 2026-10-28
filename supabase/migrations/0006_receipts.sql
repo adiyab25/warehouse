@@ -48,10 +48,14 @@ create table receipts (
   -- Without normalising, 'DN-7', 'dn-7' and ' DN-7 ' would be three different
   -- notes for one delivery.
   ref_no text,
-  -- A receipt is a two-step document: it is created as a `draft` (the expected
-  -- lines are entered, goods may still be arriving) and posted once, which is
-  -- when the ledger is written and the header becomes frozen truth.
-  status text not null default 'draft' constraint receipts_status_check check (status in ('draft', 'posted')),
+  -- A receipt is a multi-step document: it is created as a `draft` (the
+  -- expected lines are entered, goods may still be arriving), moves to
+  -- `receiving` while the goods arrive in PARTS — some lines counted, others
+  -- not yet — and becomes `posted` once EVERY line has been counted, which is
+  -- when the ledger is written and the header becomes frozen truth. A `posted`
+  -- receipt is TERMINAL (see the triggers at the foot of this file); a
+  -- `receiving` one may be posted again to receive the remaining lines.
+  status text not null default 'draft' constraint receipts_status_check check (status in ('draft', 'receiving', 'posted')),
   -- Who received the goods, and when. Set on post.
   received_by uuid,
   received_at timestamptz,
@@ -92,9 +96,10 @@ create table receipt_lines (
   tenant_id uuid not null references tenants(id),
   receipt_id uuid not null,
   variant_id uuid not null,
-  -- What the delivery note said. Not null: a receipt line always expects
-  -- SOMETHING (a line expecting nothing is a mistake, not a zero).
-  expected_qty numeric(12, 3) not null,
+  -- What the delivery note said. Not null AND POSITIVE: a line that expects
+  -- nothing is a mistake, not a zero, so `expected_qty > 0` is enforced by the
+  -- CHECK below.
+  expected_qty numeric(12, 3) not null constraint receipt_lines_expected_qty_positive_check check (expected_qty > 0),
   -- What actually arrived. Null until the line is received, so \"not yet
   -- counted\" is distinct from \"counted zero\".
   received_qty numeric(12, 3),
@@ -102,7 +107,10 @@ create table receipt_lines (
   -- person sees on the discrepancy report, and being GENERATED it cannot be set
   -- by hand or quietly edited to hide a shortfall. `coalesce(…, 0)` so an
   -- as-yet-unreceived line reads as a full shortfall of `-expected_qty` rather
-  -- than NULL.
+  -- than NULL. While the receipt is still `receiving`, that stored value is NOT
+  -- a reported shortfall: src/db/receipts.ts reports a shortfall ONLY for a line
+  -- actually received in the post, so a line whose goods have not arrived yet is
+  -- never a phantom shortage.
   variance_qty numeric(12, 3) generated always as (coalesce(received_qty, 0) - expected_qty) stored,
   -- One line per variant per receipt. Also what makes `createReceipt` atomic
   -- in practice: a duplicate variant makes the SECOND insert fail and the whole
@@ -135,3 +143,54 @@ create index receipt_lines_receipt_id_idx on receipt_lines (receipt_id);
 -- notes out of it.
 create index receipts_tenant_ref_no_idx on receipts (tenant_id, ref_no)
   where ref_no is not null;
+
+-- A POSTED receipt is terminal and immutable at the header level. TWO triggers
+-- enforce that, because two separate holes were proven against the live schema:
+--
+--   * a posted receipt could be DELETED — its lines cascaded away while the
+--     ledger row it posted (`ref_type='RECEIPT', ref_id=<receipt>`) survived as
+--     an orphan the `on_hand` view still counted. `ref_id` is POLYMORPHIC (one
+--     column pointing at receipts, counts, POs and more), so no foreign key can
+--     ever catch it. The delete guard refuses the deletion itself.
+--   * the status could be moved back out of `posted` (`posted -> draft`) with a
+--     raw UPDATE, reopening a frozen document. The status guard refuses every
+--     transition AWAY from `posted`; draft -> receiving -> posted stays legal.
+--
+-- Both raise `restrict_violation`, matching the ledger's append-only guard, and
+-- both are named so a caller sees WHY rather than a bare error. Deleting a
+-- `draft` or `receiving` receipt is still allowed — only a posted one is frozen;
+-- undoing a posted receipt is a correcting document, never an edit or a delete.
+
+create function receipts_no_delete_posted() returns trigger
+language plpgsql as $$
+begin
+  if old.status = 'posted' then
+    raise exception
+      'receipts: receipt % is posted and cannot be deleted — the document is frozen; post a correcting document to undo it',
+      old.id
+      using errcode = 'restrict_violation';
+  end if;
+  return old;
+end;
+$$;
+
+create trigger receipts_no_delete_posted
+  before delete on receipts
+  for each row execute function receipts_no_delete_posted();
+
+create function receipts_posted_is_terminal() returns trigger
+language plpgsql as $$
+begin
+  if old.status = 'posted' and new.status is distinct from 'posted' then
+    raise exception
+      'receipts: receipt % is posted and terminal — its status cannot change from ''posted'' to ''%''; post a correcting document instead',
+      new.id, new.status
+      using errcode = 'restrict_violation';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger receipts_posted_is_terminal
+  before update on receipts
+  for each row execute function receipts_posted_is_terminal();

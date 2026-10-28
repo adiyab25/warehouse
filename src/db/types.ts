@@ -156,7 +156,7 @@ export interface Receipt {
   source_location_id: string;
   dest_location_id: string;
   ref_no: string | null;
-  status: 'draft' | 'posted';
+  status: 'draft' | 'receiving' | 'posted';
   received_by: string | null;
   received_at: Date | null;
   created_at: Date;
@@ -168,7 +168,7 @@ export interface ReceiptInsert {
   source_location_id: string;
   dest_location_id: string;
   ref_no?: string | null;
-  status?: 'draft' | 'posted';
+  status?: 'draft' | 'receiving' | 'posted';
   received_by?: string | null;
   received_at?: Date | null;
   created_at?: Date;

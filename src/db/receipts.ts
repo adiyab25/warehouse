@@ -32,7 +32,9 @@ export interface PostReceiptLine {
   /**
    * The quantity in PURCHASE PACKS. Takes PRECEDENCE over `receivedQty` when
    * both are supplied, and is converted to base units through the item's
-   * `pack_factor`.
+   * `pack_factor`. Must be a real `number` (a full-number count of packs), not a
+   * numeric string: a string would be coerced silently by the multiplication and
+   * a typo would post the wrong quantity.
    */
   packs?: number;
 }
@@ -44,6 +46,17 @@ export interface ReceiptShortfall {
   received: number;
   /** `received - expected`: negative for a shortfall, positive for a surplus. */
   variance: number;
+}
+
+/**
+ * Another ALREADY-POSTED receipt in the same tenant carrying the SAME normalised
+ * delivery-note number. This is a WARNING, never a refusal: one delivery note
+ * can legitimately cover several lorries, so a second receipt under the same
+ * number is reported rather than blocked.
+ */
+export interface ReceiptDuplicate {
+  receiptId: string;
+  postedAt: string;
 }
 
 /** The one place `app.tenant_id` is read for a write, so it is written once. */
@@ -58,8 +71,10 @@ const TENANT = "nullif(current_setting('app.tenant_id', true), '')::uuid";
  * one unit of work: a line that fails — a duplicate variant breaking the
  * per-receipt unique index, or a variant belonging to another tenant breaking
  * the composite FK — rolls the whole receipt back, and NO orphan header
- * survives. This function does not open a transaction itself; call it with the
- * scoped `db` from inside `withTenant`, never nesting `withTenant`.
+ * survives. This writes the header AND its lines (two or more rows) and is
+ * therefore NOT atomic on its own: it does not open a transaction itself, it
+ * REQUIRES the caller's tenant-scoped transaction. Call it with the scoped `db`
+ * from inside `withTenant`, never nesting `withTenant`.
  *
  * `refNo` is human-typed, so it is trimmed and upper-cased here; the database
  * carries the matching CHECK and would refuse an un-normalised value anyway. An
@@ -75,11 +90,13 @@ export async function createReceipt(db: Queryable, input: CreateReceiptInput): P
 
   // A quantity must never change silently (numeric(12,3) would ROUND a bad one
   // rather than reject it), so validate the expected quantities before writing
-  // anything — the same discipline postMovement applies to the ledger.
+  // anything — the same discipline postMovement applies to the ledger. A line
+  // that expects NOTHING is a mistake, not a zero, so the floor is 1, matching
+  // the database's `expected_qty > 0` CHECK.
   for (const line of input.lines) {
-    if (typeof line.expectedQty !== 'number' || !Number.isFinite(line.expectedQty) || line.expectedQty < 0) {
+    if (typeof line.expectedQty !== 'number' || !Number.isFinite(line.expectedQty) || line.expectedQty <= 0) {
       throw new Error(
-        `createReceipt: expectedQty ${JSON.stringify(line.expectedQty)} for variant ${line.variantId} must be a finite number >= 0`,
+        `createReceipt: expectedQty ${JSON.stringify(line.expectedQty)} for variant ${line.variantId} must be a finite number > 0`,
       );
     }
   }
@@ -107,8 +124,9 @@ export async function createReceipt(db: Queryable, input: CreateReceiptInput): P
 
 /**
  * Posts a receipt: records what actually arrived on each line, writes ONE ledger
- * movement per line through {@link postMovement}, marks the receipt `posted`,
- * and RETURNS the lines whose received quantity differed from the expected one.
+ * movement per line through {@link postMovement}, advances the header's status,
+ * and returns the lines whose received quantity differed from the expected one
+ * plus any duplicate delivery-note warning.
  *
  * A receipt is a TRANSFER, not an arrival from nowhere: the movement goes
  * `from_location_id = source` (the factory) `to_location_id = dest` (the
@@ -118,14 +136,32 @@ export async function createReceipt(db: Queryable, input: CreateReceiptInput): P
  * discreteness from the item and validates quantity, reason and locations —
  * never a raw insert.
  *
+ * PARTIAL DELIVERIES: `lines` may name a SUBSET of the receipt's lines — a
+ * delivery arrives in parts. A line NOT supplied is left untouched
+ * (`received_qty` stays NULL) and produces NO shortfall: a shortfall is reported
+ * ONLY for a line actually received for less than expected, never for goods that
+ * have not arrived yet. After posting, the header becomes `posted` when EVERY
+ * line now carries a `received_qty`, and `receiving` otherwise, so a
+ * part-received document records reality instead of a phantom shortage. A
+ * `receiving` receipt may be posted again to receive the remaining lines; a
+ * `posted` receipt may NOT (it is terminal).
+ *
+ * DUPLICATE NOTE: before posting, this looks for another ALREADY-POSTED receipt
+ * in the same tenant with the same normalised `ref_no`. If one exists it is
+ * returned as `duplicateOf` — a REPORTABLE WARNING, not a refusal: a single
+ * delivery note can legitimately cover several lorries, so the second receipt
+ * still posts.
+ *
  * IDEMPOTENT: each line posts under a STABLE per-line key
  * (`receipt:<receiptId>:<variantId>`), so a retry — even one that raced past the
  * state guard below — lands on the SAME movement and cannot double the stock.
  * The state guard is the fast path; the idempotency key is the backstop.
  *
- * A POSTED receipt is terminal: a second post is refused with an error naming
- * its state. `packs`, when supplied on a line, takes precedence over
- * `receivedQty` and is converted to base units via the item's `pack_factor`.
+ * `receivedBy` is REQUIRED — the user id of whoever received the goods — so a
+ * caller cannot forget to record it; it is written to `received_by` (with
+ * `received_at`) on every post. `packs`, when supplied on a line, takes
+ * precedence over `receivedQty` and is converted to base units via the item's
+ * `pack_factor`; it must be a real number.
  *
  * Call it with the scoped `db` from inside `withTenant`; never nest `withTenant`.
  */
@@ -133,7 +169,16 @@ export async function postReceipt(
   db: Queryable,
   receiptId: string,
   lines: Array<PostReceiptLine>,
-): Promise<{ shortfalls: ReceiptShortfall[] }> {
+  receivedBy: string,
+): Promise<{ shortfalls: ReceiptShortfall[]; duplicateOf: ReceiptDuplicate | null }> {
+  // The receiver is required so `received_by` can never stay NULL. Validate
+  // before touching anything so a caller that forgot gets a named error.
+  if (typeof receivedBy !== 'string' || receivedBy.trim() === '') {
+    throw new Error(
+      `postReceipt: receivedBy must be a non-empty user id (got ${JSON.stringify(receivedBy)})`,
+    );
+  }
+
   // Lock the header for the life of the transaction, so two concurrent posts
   // serialise on it and the second sees the first's `posted` status.
   const { rows: headerRows } = await db.query<Receipt>(
@@ -144,15 +189,34 @@ export async function postReceipt(
   if (!receipt) {
     throw new Error(`postReceipt: receipt ${receiptId} was not found for this tenant`);
   }
-  if (receipt.status !== 'draft') {
+  // A `posted` receipt is terminal; a `draft` or a `receiving` one may be posted.
+  if (receipt.status === 'posted') {
     throw new Error(
-      `postReceipt: receipt ${receiptId} cannot be posted — its status is '${receipt.status}' (already posted)`,
+      `postReceipt: receipt ${receiptId} cannot be posted — its status is 'posted' (already posted)`,
     );
   }
+
+  // Surface — never block — a delivery note already posted by another receipt in
+  // this tenant. `ref_no` is already normalised (trimmed, upper-cased), so a
+  // plain equality is the right test. Skip when this receipt has no note.
+  const duplicateOf = await findPostedDuplicate(db, receipt.ref_no, receiptId);
 
   const shortfalls: ReceiptShortfall[] = [];
 
   for (const line of lines) {
+    // `packs` must be a real number: a numeric STRING would be coerced silently
+    // by the multiplication ('2' × 24 = 48) and a typo would post a wrong
+    // quantity. Same discipline as `receivedQty` below, checked BEFORE the
+    // conversion so nothing is coerced on the way in.
+    if (
+      line.packs != null &&
+      (typeof line.packs !== 'number' || !Number.isFinite(line.packs) || line.packs < 0)
+    ) {
+      throw new Error(
+        `postReceipt: packs ${JSON.stringify(line.packs)} for variant ${line.variantId} must be a finite number >= 0, not a string`,
+      );
+    }
+
     // The expected quantity comes from the stored line, never the caller: the
     // whole point is that what was EXPECTED is a fact the note fixed.
     const { rows: lineRows } = await db.query<{ expected_qty: string }>(
@@ -207,20 +271,63 @@ export async function postReceipt(
       });
     }
 
+    // A shortfall is reported for a line RECEIVED in this post and differing
+    // from expected — never for a line left untouched (its goods have not
+    // arrived, so it is not a shortage).
     const variance = lineVariance(expected, received);
     if (variance !== 0) {
       shortfalls.push({ variantId: line.variantId, expected, received, variance });
     }
   }
 
-  // Freeze the header. Done last, so a failure above (a bad variant, a refused
-  // line) rolls the whole post back and leaves the receipt still `draft`.
-  await db.query(
-    `update receipts set status = 'posted', received_at = now() where id = $1 and tenant_id = ${TENANT}`,
+  // Advance the header. `posted` only once EVERY line carries a `received_qty`;
+  // otherwise the receipt stays `receiving` and may be posted again. Done last,
+  // so a failure above (a bad variant, a refused line) rolls the whole post back
+  // and leaves the receipt in its previous status. `received_by`/`received_at`
+  // record who received — on every post, so the latest receiver is on the header.
+  const { rows: unreceived } = await db.query<{ n: number }>(
+    `select count(*)::int as n from receipt_lines
+      where tenant_id = ${TENANT} and receipt_id = $1 and received_qty is null`,
     [receiptId],
   );
+  const status = unreceived[0]!.n === 0 ? 'posted' : 'receiving';
 
-  return { shortfalls };
+  await db.query(
+    `update receipts set status = $2, received_by = $3, received_at = now()
+      where id = $1 and tenant_id = ${TENANT}`,
+    [receiptId, status, receivedBy],
+  );
+
+  return { shortfalls, duplicateOf };
+}
+
+/**
+ * The EARLIEST-posted OTHER receipt in this tenant carrying the same normalised
+ * delivery-note number, if any. `null` when the note is blank or no other
+ * receipt has posted it. A reportable warning, never a block.
+ */
+async function findPostedDuplicate(
+  db: Queryable,
+  refNo: string | null,
+  excludeReceiptId: string,
+): Promise<ReceiptDuplicate | null> {
+  if (refNo == null) return null;
+  const { rows } = await db.query<{ id: string; received_at: Date | null }>(
+    `select id, received_at
+       from receipts
+      where tenant_id = ${TENANT}
+        and ref_no = $1
+        and status = 'posted'
+        and id <> $2
+      order by received_at asc nulls last
+      limit 1`,
+    [refNo, excludeReceiptId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  // `received_at` is a timestamptz, which node-postgres hands back as a Date;
+  // the caller gets an ISO string so the shape is stable.
+  return { receiptId: row.id, postedAt: row.received_at ? row.received_at.toISOString() : '' };
 }
 
 /** The stable per-line idempotency key a receipt posts its movements under. */
