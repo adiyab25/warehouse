@@ -14,6 +14,7 @@ import {
   code128Geometry,
   code128ModuleCount,
   estimateTextWidthMm,
+  internalCodeLine,
   locationLabelSvg,
   truncateToWidth,
   variantLabelSvg,
@@ -330,6 +331,12 @@ test('truncateToWidth is pure, code-point safe and conservative', () => {
     ['mixقميصCOTTONقطني', 41.06],
     ['قميص قطني', 21.44],
     ['كرتونة', 10.13],
+    // THE TAIL the review asked for: a name built from NOTHING but the widest
+    // `س ش ص ض` forms, and a realistic long product name. The averaged estimate
+    // under-read the first (176mm drawn on a 46mm band) — the constant must now
+    // clear it.
+    ['سشصض'.repeat(12), 175.19],
+    ['صندوق شحن شاش صيني', 43.08],
   ];
   for (const [sample, measuredMm] of measured) {
     const estimateMm = estimateTextWidthMm(sample, { fontSizeMm: 3.4 });
@@ -413,4 +420,218 @@ test('two distinct codes produce two distinct labels', () => {
   assert.equal(textContent(a, 'label-sku'), 'AB-0012');
   assert.equal(textContent(b, 'label-sku'), 'XY-9999');
   assert.equal(code128ModuleCount('AB-0012') > 0, true);
+});
+
+// ---------------------------------------------------------------------------
+// Render-measured — the WORST-CASE name really fits the 46 mm band.
+// ---------------------------------------------------------------------------
+
+/**
+ * Widths Chromium ACTUALLY drew, in 1/100 px at font-size 100, measured with
+ * `getComputedTextLength` in this label's font stack at weight 700 (Tahoma, the
+ * deployment target's Arabic face). Keyed by the EXACT string: a change that
+ * alters what the label prints — say, the four widest constants falling back to
+ * the 0.75 average — produces a string this table still measures, and the band
+ * assertion catches the clip. A string NOT in the table is refused, not guessed.
+ */
+const CHROMIUM_PX_AT_100: Record<string, number> = {
+  // the name the fixed constants cut the 48-char all-widest-form name to …
+  'سشصضسشصض…': 996.688,
+  // … and what it is cut to if the widest constants revert to the 0.75 average:
+  'سشصضسشصضسشصض…': 1422.266,
+  'سشصضسشصضسشصضسشصض…': 1847.859,
+  'صندوق شحن شاش …': 1082.031,
+  'ABCDEFGHIJKLMNOP…': 1184.438,
+  'الرف الجيزة ا…': 690.875,
+};
+
+/** The millimetres Chromium drew for `text` at `fontSizeMm`, or `undefined`. */
+function renderedMm(text: string, fontSizeMm: number): number | undefined {
+  const px = CHROMIUM_PX_AT_100[text];
+  return px === undefined ? undefined : (px / 100) * fontSizeMm;
+}
+
+test('a WORST-CASE name is truncated so the RENDERED text fits the 46 mm band', () => {
+  const band = 46;
+
+  // A name of NOTHING but the widest `س ش ص ض` forms. The old averaged estimate
+  // accepted this and it rendered ~15 mm off the label; the widest-form constant
+  // must cut it until Chromium's own measurement fits.
+  const worst = 'سشصض'.repeat(12);
+  const svg = variantLabelSvg({ ...BASE, nameAr: worst });
+  const shown = textContent(svg, 'label-name');
+  const rendered = renderedMm(shown, 3.4);
+  assert.ok(
+    rendered !== undefined,
+    `the worst-case name was cut to ${JSON.stringify(shown)}, which was never measured in Chromium — re-measure it`,
+  );
+  assert.ok(
+    estimateTextWidthMm(shown, { fontSizeMm: 3.4 }) >= rendered!,
+    'the estimate must be at least the width Chromium drew for the shown name',
+  );
+  assert.ok(
+    rendered! <= band,
+    `the RENDERED worst-case name is ${rendered!.toFixed(3)}mm, over the ${band}mm band`,
+  );
+
+  // A realistic long product name — the other half of the tail.
+  const realistic = 'صندوق شحن شاش صيني كبير جدا للقياس';
+  const realShown = textContent(variantLabelSvg({ ...BASE, nameAr: realistic }), 'label-name');
+  const realMm = renderedMm(realShown, 3.4);
+  assert.ok(realMm !== undefined, `unmeasured realistic render ${JSON.stringify(realShown)}`);
+  assert.ok(
+    estimateTextWidthMm(realShown, { fontSizeMm: 3.4 }) >= realMm!,
+    'the estimate must be conservative for the realistic name too',
+  );
+  assert.ok(realMm! <= band, `the RENDERED realistic name is ${realMm!.toFixed(3)}mm, over the band`);
+
+  // A 22-character Latin name.
+  const latinShown = textContent(variantLabelSvg({ ...BASE, nameAr: 'ABCDEFGHIJKLMNOPQRSTUV' }), 'label-name');
+  const latinMm = renderedMm(latinShown, 3.4);
+  assert.ok(latinMm !== undefined, `unmeasured Latin render ${JSON.stringify(latinShown)}`);
+  assert.ok(latinMm! <= band, `the RENDERED 22-char Latin name is ${latinMm!.toFixed(3)}mm, over the band`);
+
+  // The worst-case name never moves the label's geometry.
+  assert.equal(rootTag(svg), rootTag(variantLabelSvg(BASE)), 'the name must not change the root geometry');
+});
+
+test('the widest Arabic letters carry a widest-form constant, not the average', () => {
+  // س ش ص ض (U+0633..U+0636) — a name of "all widest forms" is made of these —
+  // must estimate far wider than the alphabet average, or such a name is
+  // accepted and then clipped (the defect the render caught).
+  for (const cp of ['س', 'ش', 'ص', 'ض']) {
+    const perCent = estimateTextWidthMm(cp, { fontSizeMm: 100 });
+    assert.ok(
+      perCent >= 140,
+      `${JSON.stringify(cp)} estimates ${perCent}% of em; the widest measured form is ~142% and the alphabet average ~65%`,
+    );
+  }
+  // …while the rest of the alphabet keeps the measured average.
+  assert.ok(estimateTextWidthMm('ا', { fontSizeMm: 100 }) < 100, 'ا keeps the averaged width');
+  assert.ok(GLYPH_EM.arabicWide > GLYPH_EM.arabic, 'the widest-form constant must exceed the average');
+});
+
+// ---------------------------------------------------------------------------
+// The SKU: printed as its own labelled line ONLY when it differs from the
+// barcode, and never allowed to move the barcode or the encoded code.
+// ---------------------------------------------------------------------------
+
+test('a variant whose SKU differs from its barcode prints a labelled internal-code line', () => {
+  const svg = variantLabelSvg({ ...BASE, sku: 'INT-9999' });
+  const line = textContent(svg, 'label-internal');
+  assert.match(line, /كود داخلي/, 'the line is labelled in Arabic as the internal code');
+  assert.match(line, /INT-9999/, 'the line carries the SKU value');
+  assert.equal(internalCodeLine('INT-9999', 'AB-0012'), 'كود داخلي: INT-9999');
+  // NOT a second naked code: it is italic, smaller and prefixed, and RTL like
+  // the other Arabic runs — so it cannot be mistaken for the encoded value.
+  assert.match(svg, /class="label-internal"[^>]*font-style="italic"/);
+  assert.match(svg, /class="label-internal"[^>]*direction="rtl"/);
+  assert.match(svg, /class="label-internal"[^>]*font-size="2.2"/);
+  // The single machine-read code line is unchanged.
+  assert.equal(textContent(svg, 'label-sku'), 'AB-0012');
+});
+
+test('the internal-code line is ABSENT when the SKU equals the barcode', () => {
+  for (const sku of ['AB-0012', 'ab-0012', ' AB-0012 ', null, undefined]) {
+    const svg = variantLabelSvg({ ...BASE, sku });
+    assert.ok(
+      !svg.includes('label-internal'),
+      `no internal line should print for sku ${JSON.stringify(sku)} — it is the same code as the barcode`,
+    );
+  }
+  assert.equal(internalCodeLine(null, 'AB-0012'), null);
+  assert.equal(internalCodeLine('', 'AB-0012'), null);
+  assert.equal(internalCodeLine('ab-0012', 'AB-0012'), null);
+});
+
+test('adding the internal-code line never moves the barcode or the encoded code', () => {
+  const base = { ...BASE, nameAr: 'كرتونة كبيرة', size: 'L', colour: 'أحمر' };
+  const without = variantLabelSvg(base);
+  const withSku = variantLabelSvg({ ...base, sku: 'INT-9999' });
+
+  // The with-SKU render is the without-SKU render PLUS exactly one internal line
+  // — nothing else changed. Removing that line reproduces the other byte for
+  // byte, so the barcode rect, the name/attrs bands and the code line are
+  // provably in the same place.
+  const stripped = withSku.replace(/<text class="label-internal"[^>]*>[^<]*<\/text>/, '');
+  assert.equal(stripped, without, 'the internal line must not disturb any other band');
+  assert.deepEqual(barcodeRect(withSku), barcodeRect(without), 'the barcode block must not move');
+
+  const codeY = (s: string) => /<text class="label-sku"[^>]*y="([\d.]+)"/.exec(s)![1];
+  assert.equal(codeY(withSku), codeY(without), 'the encoded code must keep its baseline');
+  assert.equal(textContent(withSku, 'label-sku'), textContent(without, 'label-sku'));
+});
+
+test('an internal code too wide to show in full is refused, not clipped', () => {
+  const long = 'INTERNAL-PREFIX-000000000000';
+  assert.ok(
+    estimateTextWidthMm(`كود داخلي: ${long}`, { fontSizeMm: 2.2 }) > 46,
+    'the fixture must genuinely overflow the 46 mm band',
+  );
+  assert.throws(
+    () => variantLabelSvg({ ...BASE, sku: long }),
+    (err: Error) => /internal code/.test(err.message) && err.message.includes(long),
+    'an internal code that will not fit must refuse the label, naming the code',
+  );
+});
+
+test('a long LOCATION name is truncated by width too', () => {
+  const long = 'الرف الجيزة الرئيسي الطويل جدا للاختبار والقياس';
+  const svg = locationLabelSvg({ nameAr: long, code: 'BIN-A1' });
+  const shown = textContent(svg, 'label-name');
+
+  assert.ok(shown.endsWith('…'), `a long location name must be ellipsised (got ${shown})`);
+  assert.ok(
+    estimateTextWidthMm(shown, { fontSizeMm: 4.2 }) <= 46,
+    'the shown location name must fit the band',
+  );
+  assert.ok(!svg.includes(long), 'the untruncated location name must never reach the SVG');
+
+  const rendered = renderedMm(shown, 4.2);
+  assert.ok(rendered !== undefined, `unmeasured location render ${JSON.stringify(shown)}`);
+  assert.ok(rendered! <= 46, `Chromium drew the location name at ${rendered!.toFixed(3)}mm, over the band`);
+});
+
+// ---------------------------------------------------------------------------
+// The TRUE longest code each shape can print — re-derived, and pinned.
+// ---------------------------------------------------------------------------
+
+test('the longest code each shape can print is accepted, one more is refused', () => {
+  const band = 46;
+  const opts = { fontSizeMm: 3, letterSpacingMm: 0.3 };
+
+  // DIGITS-ONLY: 19 digits is the longest that fits BOTH the 46 mm text band
+  // (44.460 mm) and the 0.25 mm module floor (0.261364 mm/module); the 20th
+  // digit overruns the band (46.800 mm).
+  const digits19 = '0'.repeat(19);
+  const digits20 = '0'.repeat(20);
+  assert.ok(estimateTextWidthMm(digits19, opts) <= band, '19 digits fit the text band');
+  assert.ok(code128Geometry(digits19, band).moduleMm >= MIN_MODULE_MM, '19 digits clear the module floor');
+  assert.doesNotThrow(
+    () => variantLabelSvg({ ...BASE, barcode: digits19 }),
+    '19 digits is the longest digits-only code that prints',
+  );
+  assert.ok(estimateTextWidthMm(digits20, opts) > band, '20 digits overflow the text band');
+  assert.throws(() => variantLabelSvg({ ...BASE, barcode: digits20 }), /band/);
+
+  // PREFIX-SEQ: with a two-letter prefix the longest accepted is 17 characters
+  // ('AB-' + 14 digits, 0.261364 mm/module) — the 18th character overflows the
+  // MODULE floor. The previous report's "19 chars" was the DIGITS figure, not
+  // this shape's; a 19-character `PRODUCTPREFIX-…` never even reaches the band.
+  const seq17 = 'AB-' + '0'.repeat(14);
+  const seq18 = 'AB-' + '0'.repeat(15);
+  assert.equal(seq17.length, 17);
+  assert.doesNotThrow(
+    () => variantLabelSvg({ ...BASE, barcode: seq17 }),
+    'the longest PREFIX-SEQ code prints',
+  );
+  assert.throws(
+    () => code128Geometry(seq18, band),
+    /module/,
+    'one more character overflows the module floor',
+  );
+
+  // The named `PRODUCTPREFIX-…` shape is refused at EVERY length: its 14-module
+  // prefix already blows the module floor before the width guard is reached.
+  assert.throws(() => variantLabelSvg({ ...BASE, barcode: 'PRODUCTPREFIX-0000' }), /module/);
 });

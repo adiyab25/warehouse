@@ -104,6 +104,9 @@ export async function variantLabelResponse(request: Request, variantId: string):
         size: attrs.size,
         colour: attrs.colour,
         barcode: found.variant.barcode,
+        // The internal code too: `item_variants.sku` is a SEPARATE column that
+        // may differ from `barcode`, and the label prints it when it does.
+        sku: found.variant.sku,
       });
     } catch {
       // A stored row with no usable barcode, or a code too long to print in

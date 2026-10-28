@@ -316,3 +316,72 @@ test('two distinct variants produce two distinct labels', { skip: !sqlTestUrl() 
     restore();
   }
 });
+
+test('a variant whose SKU differs from its barcode renders BOTH codes', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+  const restore = configureDeployment(t1);
+  try {
+    // `item_variants.sku` and `item_variants.barcode` are SEPARATE columns that
+    // can differ, so a label must carry both: the encoded value for the scanner
+    // and the internal code for a person.
+    const { variantId, token } = await withDb(async (db) => {
+      const created = await withTenant(db, t1, (tdb) =>
+        createItem(tdb, {
+          nameAr: 'قميص قطني',
+          family: 'sellable',
+          sku: 'SH-0001',
+          barcode: 'BC-0001',
+          attrs: { size: 'L', colour: 'أبيض' },
+        }),
+      );
+      const session = await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }));
+      return { variantId: created.variant.id, token: session.token };
+    });
+
+    const response = await getVariantLabel(
+      labelRequest(`/api/labels/variant/${variantId}`, token),
+      { params: Promise.resolve({ variantId }) },
+    );
+    assert.equal(response.status, 200, 'a variant with two codes is still a valid label');
+
+    const body = await response.text();
+    // The scannable/printed value is the BARCODE …
+    assert.match(body, /BC-0001/, 'the encoded code is the barcode');
+    // … and the internal SKU is on its OWN, clearly labelled line.
+    assert.match(body, /class="label-internal"/, 'the internal code gets its own line');
+    assert.match(body, /SH-0001/, 'the internal line carries the SKU');
+    assert.match(body, /كود داخلي/, 'the internal line is labelled, not a second naked code');
+  } finally {
+    restore();
+  }
+});
+
+test('a variant whose SKU equals its barcode renders a SINGLE code line', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+  const restore = configureDeployment(t1);
+  try {
+    const { variantId, token } = await withDb(async (db) => {
+      const created = await withTenant(db, t1, (tdb) =>
+        createItem(tdb, { nameAr: 'قبعة', family: 'sellable', sku: 'SH-0002', barcode: 'SH-0002' }),
+      );
+      const session = await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }));
+      return { variantId: created.variant.id, token: session.token };
+    });
+
+    const response = await getVariantLabel(
+      labelRequest(`/api/labels/variant/${variantId}`, token),
+      { params: Promise.resolve({ variantId }) },
+    );
+    assert.equal(response.status, 200);
+
+    const body = await response.text();
+    assert.match(body, /SH-0002/, 'the one code is printed');
+    assert.doesNotMatch(
+      body,
+      /class="label-internal"/,
+      'an identical SKU must NOT waste a line — the code is already on the sticker',
+    );
+  } finally {
+    restore();
+  }
+});

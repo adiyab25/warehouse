@@ -118,21 +118,33 @@ const BWIP_UNITS_PER_MODULE = 2;
  *
  * MEASURED, THEN ROUNDED UP. `getComputedTextLength` in Chromium, drawing in
  * this exact font stack at weight 700, reports a 26-capital run at 0.693 em, a
- * lowercase run at 0.571 em, a digit run at 0.637 em, an Arabic alphabet at
- * 0.647 em, and a deliberately mixed Arabic/Latin run at 0.710 em. Every
- * constant here is at or ABOVE its measurement, because the estimate must be
- * conservative (rule (5)): a run this function accepts must not overflow when a
- * browser finally measures it.
+ * lowercase run at 0.571 em, a digit run at 0.637 em, and the Arabic alphabet
+ * at 0.647 em. Every constant here is at or ABOVE its measurement, because the
+ * estimate must be conservative (rule (5)): a run this function accepts must
+ * not overflow when a browser finally measures it.
  *
- * NOTE ON ARABIC: connected Arabic script has no single glyph width — an
- * isolated final `س` measures ~1.2 em where a medial `ا` is ~0.31 em — so the
- * constant is the measured AVERAGE across words, which is what a real name
- * resembles. A name built entirely from the widest `س ش ص ض` forms is the one
- * case an average-width estimate can under-read.
+ * THE FOUR WIDEST ARABIC LETTERS ARE MEASURED AS WIDEST FORMS, NOT AVERAGED.
+ * Connected Arabic has no single glyph width, so a per-run average is right for
+ * a mixed name — but the four letters `س ش ص ض` are wide EVEN WHEN CONNECTED.
+ * Measured in the label's font stack (Tahoma, the deployment target's Arabic
+ * face), /100px: an isolated `س`/`ش` is 1.402 em and an isolated `ص`/`ض` is
+ * 1.421 em; a fully connected run `سشصض` still averages 1.178 em per
+ * character. Averaging them into the 0.647 em alphabet figure under-read a name
+ * built from them by more than a factor of two — such a name rendered ~15 mm
+ * off a 46 mm band, i.e. CLIPPED. They therefore take their own constant,
+ * {@link GLYPH_EM.arabicWide}: 1.45 em, the widest measured form (1.421 em)
+ * rounded up with ~2% of head-room. Every other Arabic letter keeps the
+ * alphabet AVERAGE, which is what a real (mixed) name resembles.
  */
 export const GLYPH_EM = {
   /** Arabic letters (both names are Arabic). */
   arabic: 0.75,
+  /**
+   * The four widest Arabic letters — `س` (U+0633), `ش` (U+0634), `ص` (U+0635),
+   * `ض` (U+0636) — in their WIDEST connected form. Their isolated form measures
+   * 1.402-1.421 em and their connected run 1.178 em; 1.45 em covers both.
+   */
+  arabicWide: 1.45,
   /** Latin capitals `A-Z` (bold). */
   latinUpper: 0.75,
   /** Latin lowercase `a-z`. */
@@ -148,6 +160,14 @@ export const GLYPH_EM = {
   /** Anything else — punctuation, `·`, an astral character. */
   other: 0.8,
 } as const;
+
+/**
+ * The widest Arabic letters, whose CONNECTED forms are still far wider than the
+ * alphabet average, mapped to {@link GLYPH_EM.arabicWide}. See the GLYPH_EM
+ * note: these are the letters a name of "all widest forms" is built from, and
+ * the only ones an averaged estimate measurably under-read.
+ */
+const WIDE_ARABIC_CODEPOINTS = new Set([0x0633, 0x0634, 0x0635, 0x0636]);
 
 /** True for a code point in the Arabic / Arabic-supplement / presentation ranges. */
 function isArabic(cp: number): boolean {
@@ -168,6 +188,9 @@ function charEm(cp: number): number {
   if (cp === 32 || cp === 0x00a0) return GLYPH_EM.space;
   if (cp === 45) return GLYPH_EM.hyphen;
   if (cp === 0x2026) return GLYPH_EM.ellipsis;
+  // The four widest Arabic letters (see the GLYPH_EM note) keep their WIDEST
+  // connected form; every other Arabic letter uses the alphabet average.
+  if (WIDE_ARABIC_CODEPOINTS.has(cp)) return GLYPH_EM.arabicWide;
   if (isArabic(cp)) return GLYPH_EM.arabic;
   return GLYPH_EM.other;
 }
@@ -185,6 +208,29 @@ export const ARABIC_FONT_STACK = "'Noto Naskh Arabic','Amiri',Tahoma,'Segoe UI',
 
 /** The inline direction/isolate style a machine-read (Latin) value carries. */
 const LTR_STYLE = 'direction:ltr;unicode-bidi:isolate';
+
+/**
+ * The fraction of a text band a truncated run may actually fill.
+ *
+ * A second safety margin, on top of the rounded-up {@link GLYPH_EM} constants
+ * (rule (5)): per-character summing ignores kerning and the join-forming
+ * ligatures of connected Arabic, so a real browser can draw a run a hair wider
+ * than the sum. Holding back 3% of every TRUNCATED band means even that
+ * second-order under-read stays inside the printable area. The machine-read
+ * CODE band does NOT use it — a code is shown in full or the label is refused
+ * (rule (2)), so it can never be clipped, and its constants already carry
+ * ~7-8% of head-room.
+ */
+const TRUNCATE_SAFETY = 0.97;
+
+/**
+ * The Arabic prefix printed before the variant's INTERNAL code (its `sku`) when
+ * that code differs from the barcode. "Internal code" — literally `sku` — is
+ * deliberately distinct from the encoded value's own wording, so the two can
+ * never be mistaken for each other on the sticker. Arabic-first, with the code
+ * itself in Latin digits like every other machine-read value.
+ */
+const INTERNAL_CODE_LABEL = 'كود داخلي:';
 
 /** The reference geometry the layout is authored against; overrides scale it. */
 const REF_WIDTH = 50;
@@ -366,17 +412,18 @@ function svgOpen(widthMm: number, heightMm: number): string {
 }
 
 /**
- * Guards a machine-read code against being clipped: the printed string and the
- * encoded string are the SAME, so if it cannot be shown in full at `bandMm` the
- * label is refused (rule (2)) rather than abbreviated.
+ * Guards a machine-read string against being clipped: if it cannot be shown in
+ * full at `bandMm` the label is refused (rule (2)) rather than abbreviated — a
+ * truncated internal code would be as dangerous as a truncated barcode. `what`
+ * names the thing refused (`code`, `internal code`) for the error message.
  */
-function assertCodeFitsBand(code: string, bandMm: number, opts: TextWidthOpts): void {
-  const widthMm = estimateTextWidthMm(code, opts);
+function assertFitsBand(text: string, bandMm: number, opts: TextWidthOpts, what: string): void {
+  const widthMm = estimateTextWidthMm(text, opts);
   if (widthMm > bandMm) {
     throw new Error(
-      `labels: code ${JSON.stringify(code)} needs about ${n(widthMm)}mm at a ` +
+      `labels: ${what} ${JSON.stringify(text)} needs about ${n(widthMm)}mm at a ` +
         `${opts.fontSizeMm}mm font but the printable band is only ${n(bandMm)}mm — ` +
-        `refusing rather than printing a clipped code`,
+        `refusing rather than printing a clipped ${what}`,
     );
   }
 }
@@ -391,19 +438,47 @@ export interface VariantLabelInput {
   colour?: string | null;
   /** The code — PRINTED as the machine-read value AND encoded in the barcode. */
   barcode: string;
+  /**
+   * The variant's INTERNAL code (`item_variants.sku`), which the schema stores
+   * separately from — and can differ from — {@link barcode}. When it differs
+   * the label prints it on its OWN, clearly labelled line, so the product's
+   * internal identity survives a barcode that has been scratched or worn off;
+   * when it equals the barcode the line is omitted (the very same code is
+   * already on the sticker, so a duplicate would only waste label space).
+   *
+   * It is NEVER handed to bwip-js: the scannable symbol encodes {@link barcode},
+   * and only that value is drawn as the machine-read `.label-sku` line.
+   */
+  sku?: string | null;
   /** Label width in mm; a test-only seam — {@link LABEL_WIDTH_MM} in the app. */
   widthMm?: number;
   /** Label height in mm; a test-only seam — {@link LABEL_HEIGHT_MM} in the app. */
   heightMm?: number;
 }
 
+/** Vertical placement (reference mm) the variant layout is authored against. */
+const VARIANT_LINES = {
+  name: 6,
+  attrs: 9.6,
+  barcode: 10.5,
+  internal: 25.1,
+  code: 28.9,
+} as const;
+
 /**
- * Renders the VARIANT label: barcode + Arabic item name + size/colour + code.
+ * Renders the VARIANT label: barcode + Arabic item name + size/colour + the
+ * encoded code, plus — only when it differs — the internal code.
  *
  * Throws when the code is blank, when it cannot be shown in full at the label's
  * width, or when it cannot be printed at the module floor — the caller (the
  * label route) turns each into a 400 rather than serving a sticker nobody can
- * trust.
+ * trust. The optional internal-code line is refused the same way if it cannot
+ * be shown in full: a clipped identity code is as dangerous as a clipped
+ * barcode.
+ *
+ * GEOMETRY IS INDEPENDENT OF THE INTERNAL LINE. The barcode block and the
+ * name/attrs/code bands sit at FIXED positions whether or not the internal line
+ * is present, so adding it can never push the encoded code off the label.
  */
 export function variantLabelSvg(input: VariantLabelInput): string {
   if (typeof input.barcode !== 'string' || input.barcode.trim() === '') {
@@ -422,19 +497,31 @@ export function variantLabelSvg(input: VariantLabelInput): string {
 
   const margin = X(2);
   const contentW = widthMm - 2 * margin;
+  // Truncated text bands hold back {@link TRUNCATE_SAFETY}; the code band does
+  // not (it refuses rather than clips).
+  const textBandW = contentW * TRUNCATE_SAFETY;
 
-  const name = escapeXml(truncateToWidth(input.nameAr, contentW, { fontSizeMm: Y(3.4) }));
+  const name = escapeXml(truncateToWidth(input.nameAr, textBandW, { fontSizeMm: Y(3.4) }));
 
   const attrsParts = [input.size, input.colour]
     .map((v) => (v ?? '').trim())
     .filter((v) => v !== '');
-  const attrs = truncateToWidth(attrsParts.join(' · '), contentW, { fontSizeMm: Y(2.6) });
+  const attrs = truncateToWidth(attrsParts.join(' · '), textBandW, { fontSizeMm: Y(2.6) });
 
   const codeFontMm = Y(3);
-  assertCodeFitsBand(input.barcode, contentW, {
+  assertFitsBand(input.barcode, contentW, {
     fontSizeMm: codeFontMm,
     letterSpacingMm: X(0.3),
-  });
+  }, 'code');
+
+  // The internal code: printed on its own labelled line ONLY when it differs
+  // from the barcode. Comparing upper-cased (the schema stores both columns
+  // canonicalised) means a mere case difference does not waste a line, and the
+  // code printed is the value as stored.
+  const skuLine = internalCodeLine(input.sku, input.barcode);
+  if (skuLine !== null) {
+    assertFitsBand(skuLine, contentW, { fontSizeMm: Y(2.2) }, 'internal code');
+  }
 
   const parts: string[] = [
     svgOpen(widthMm, heightMm),
@@ -444,29 +531,58 @@ export function variantLabelSvg(input: VariantLabelInput): string {
     // `text-anchor="start"` pins the right edge at `x` and the run grows
     // leftward. `end` would pin the LEFT edge there and let the run overflow
     // off the label — the exact bug a render caught.
-    `<text class="label-name" x="${n(widthMm - margin)}" y="${n(Y(6))}" ` +
+    `<text class="label-name" x="${n(widthMm - margin)}" y="${n(Y(VARIANT_LINES.name))}" ` +
       `direction="rtl" text-anchor="start" font-size="${n(Y(3.4))}" font-weight="700">${name}</text>`,
   ];
 
   if (attrs !== '') {
     parts.push(
-      `<text class="label-attrs" x="${n(widthMm - margin)}" y="${n(Y(9.6))}" ` +
+      `<text class="label-attrs" x="${n(widthMm - margin)}" y="${n(Y(VARIANT_LINES.attrs))}" ` +
         `direction="rtl" text-anchor="start" font-size="${n(Y(2.6))}">${escapeXml(attrs)}</text>`,
     );
   }
 
-  // The barcode BLOCK: fixed rect, independent of the name above it.
-  parts.push(barcodeBlock(input.barcode, margin, Y(11.5), contentW, Y(BARCODE_HEIGHT_MM)));
+  // The barcode BLOCK: fixed rect, independent of the name above it AND of the
+  // internal line below it.
+  parts.push(barcodeBlock(input.barcode, margin, Y(VARIANT_LINES.barcode), contentW, Y(BARCODE_HEIGHT_MM)));
+
+  // The INTERNAL code line — its own labelled row, above the encoded code and
+  // visually distinct from it (smaller, italic, prefixed), so the two can never
+  // be confused. RTL-anchored to the right like the Arabic runs; the Latin code
+  // inside bides left of its Arabic label.
+  if (skuLine !== null) {
+    parts.push(
+      `<text class="label-internal" x="${n(widthMm - margin)}" y="${n(Y(VARIANT_LINES.internal))}" ` +
+        `direction="rtl" text-anchor="start" font-size="${n(Y(2.2))}" ` +
+        `font-weight="400" font-style="italic">${escapeXml(skuLine)}</text>`,
+    );
+  }
 
   // The code: the SAME string the bars encode, isolated LTR from the Arabic.
   parts.push(
-    `<text class="label-sku" x="${n(margin)}" y="${n(Y(27.5))}" ` +
+    `<text class="label-sku" x="${n(margin)}" y="${n(Y(VARIANT_LINES.code))}" ` +
       `style="${LTR_STYLE}" direction="ltr" text-anchor="start" ` +
       `font-size="${n(codeFontMm)}" font-weight="700" letter-spacing="${n(X(0.3))}">${escapeXml(input.barcode)}</text>`,
   );
 
   parts.push('</svg>');
   return parts.join('');
+}
+
+/**
+ * The internal-code line to print, or `null` when there is nothing to print.
+ *
+ * `null` when the SKU is absent/blank, or when it equals the barcode (compared
+ * upper-cased, matching the schema's canonical storage) — the identical case
+ * keeps the single `.label-sku` line and does not waste space. Otherwise the
+ * line is the Arabic label {@link INTERNAL_CODE_LABEL} followed by the code.
+ * Exported so a test can assert the wording and the presence rule directly.
+ */
+export function internalCodeLine(sku: string | null | undefined, barcode: string): string | null {
+  const value = (sku ?? '').trim();
+  if (value === '') return null;
+  if (value.toUpperCase() === barcode.trim().toUpperCase()) return null;
+  return `${INTERNAL_CODE_LABEL} ${value}`;
 }
 
 /** The input {@link locationLabelSvg} accepts. */
@@ -503,14 +619,15 @@ export function locationLabelSvg(input: LocationLabelInput): string {
 
   const margin = X(2);
   const contentW = widthMm - 2 * margin;
+  const textBandW = contentW * TRUNCATE_SAFETY;
 
-  const name = escapeXml(truncateToWidth(input.nameAr, contentW, { fontSizeMm: Y(4.2) }));
+  const name = escapeXml(truncateToWidth(input.nameAr, textBandW, { fontSizeMm: Y(4.2) }));
 
   const codeFontMm = Y(3.2);
-  assertCodeFitsBand(input.code, contentW, {
+  assertFitsBand(input.code, contentW, {
     fontSizeMm: codeFontMm,
     letterSpacingMm: X(0.3),
-  });
+  }, 'code');
 
   return (
     svgOpen(widthMm, heightMm) +
