@@ -301,9 +301,9 @@ test('a return against a received requisition moves it to returned', { skip: !sq
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
     await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
 
     // The branch holds the 5 it received; send it all back.
@@ -394,9 +394,9 @@ test('a requisition return is bounded by what the document delivered', { skip: !
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
     await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
 
     // The branch ALSO holds stock from another source — 100 units the

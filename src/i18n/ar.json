@@ -151,5 +151,20 @@
   "stock.reason.opening_balance": "رصيد افتتاحي",
   "stock.error.unauthenticated": "انتهت الجلسة. سجّل الدخول من جديد.",
   "stock.error.forbidden": "شاشات المخزون متاحة للمخزن وللفرع المصرّح له فقط.",
-  "stock.error.invalid": "تحقّق من الصنف المطلوب."
+  "stock.error.invalid": "تحقّق من الصنف المطلوب.",
+  "stock.usage.heading": "الاستخدام والقيمة حسب الفرع",
+  "stock.usage.subtitle": "قيمة ما صُرف من المخزن إلى الفروع في الفترة المحددة.",
+  "stock.usage.cost_note": "القيمة بالتكلفة (ما دفعه المخزن)، وليست سعر بيع.",
+  "stock.usage.from": "من",
+  "stock.usage.to": "إلى",
+  "stock.usage.submit": "عرض",
+  "stock.usage.window": "الفترة: من {from} إلى {to}",
+  "stock.usage.default_window": "الفترة الافتراضية هي الشهر الحالي.",
+  "stock.usage.branch": "الفرع",
+  "stock.usage.item": "الصنف",
+  "stock.usage.sku": "الكود",
+  "stock.usage.qty": "الكمية المصروفة",
+  "stock.usage.total": "الإجمالي",
+  "stock.usage.empty": "لا يوجد صرف إلى الفروع في هذه الفترة.",
+  "stock.usage.truncated": "يُعرض أول {count} سطر — ضيّق الفترة لعرض ما بعدها."
 }

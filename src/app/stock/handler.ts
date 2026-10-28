@@ -6,10 +6,14 @@ import {
   ON_HAND_LIMIT,
   movementHistoryDetailed,
   onHandByLocation,
+  usageByBranch,
+  usageTotalEgp,
   type MovementDetail,
   type OnHandRow,
+  type UsageRow,
 } from '../../db/usage.ts';
 import { canApproveOrIssue, canRequest } from '../../domain/requisition-ui.ts';
+import { isUuid } from '../../domain/ids.ts';
 
 /**
  * THE STOCK SCREENS' LOGIC, with the request boundary left OUT — the same seam
@@ -233,7 +237,10 @@ export async function getVariantHistory(
   cookie: string | undefined | null,
   variantId: string,
 ): Promise<StockHistoryOutcome> {
-  if (typeof variantId !== 'string' || variantId.trim() === '') {
+  // A malformed id (a stale or hand-edited link, `not-a-uuid`) gets the SAME
+  // graceful refusal a missing one does — checked by SHAPE before any query, so
+  // an uncastable text id can never reach Postgres and 500 the page.
+  if (!isUuid(variantId)) {
     return { ok: false, error: 'invalid' };
   }
 
@@ -280,4 +287,113 @@ export async function getVariantHistory(
     truncated,
     branchLabel: scope.branchLabel,
   };
+}
+
+// ---------------------------------------------------------------------------
+// THE ACCOUNTS VIEW — usage and value by branch (financials role).
+// ---------------------------------------------------------------------------
+
+/** Two zero-padded digits, for building a `YYYY-MM-DD` string. */
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/**
+ * The DEFAULT window: THIS MONTH — from the 1st (inclusive) to the 1st of next
+ * month (exclusive), in UTC, as `YYYY-MM-DD`. A half-open month-to-month window
+ * so two adjacent months never double-count a movement on the boundary instant,
+ * matching {@link usageByBranch}'s contract.
+ *
+ * The choice is stated on the screen, and the page makes it EXPLICIT in the URL
+ * (it redirects to `?from=…&to=…`), so a report can be shared or bookmarked and
+ * a later reader sees exactly which window produced the figure.
+ */
+export function monthWindow(now: Date = new Date()): { from: string; to: string } {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const from = `${y}-${pad2(m + 1)}-01`;
+  const next = new Date(Date.UTC(y, m + 1, 1));
+  const to = `${next.getUTCFullYear()}-${pad2(next.getUTCMonth() + 1)}-01`;
+  return { from, to };
+}
+
+/** Is `[from, to)` a well-formed, non-empty window? */
+export function isValidWindow(from: string, to: string): boolean {
+  const f = Date.parse(from);
+  const t = Date.parse(to);
+  return Number.isFinite(f) && Number.isFinite(t) && f < t;
+}
+
+/** The window the accounts view runs for; `from`/`to` come from the URL. */
+export interface UsageWindow {
+  from?: string | null;
+  to?: string | null;
+}
+
+/** A successful read: the rows, the exact SQL total and the window echoed back. */
+export interface UsageReport {
+  ok: true;
+  /** Always the network — money across branches is not a branch-level fact. */
+  scope: 'network';
+  /** The window actually run, echoed so the screen states it. */
+  from: string;
+  to: string;
+  rows: UsageRow[];
+  /** The TOTAL, an exact `numeric(12,2)` STRING computed in SQL. */
+  totalEgp: string;
+  /** True when more rows exist beyond the bound the screen shows. */
+  truncated: boolean;
+}
+
+/** What the accounts read answers: the report, or a refusal CODE. */
+export type UsageReportOutcome = UsageReport | { ok: false; error: StockRefusal };
+
+/**
+ * USAGE AND VALUE BY BRANCH, for a date window — the financials surface.
+ *
+ * ROLE: only `owner` and `warehouse_manager` may read it, because it is a
+ * WHOLE-NETWORK money figure and money across the network is not a branch-level
+ * fact. A `branch_user` is refused SERVER-SIDE (`forbidden`) — there is no
+ * scoped variant for them here: a branch's own consumption value is a different
+ * question, and answering it with the network total would be a leak. Any other
+ * role is refused too, and an unauthenticated request is refused.
+ *
+ * MONEY: `totalEgp` and every row's `valueEgp` are exact numeric STRINGS
+ * computed in SQL (`sum(qty * cost_egp)::numeric(12,2)`); nothing here sums
+ * money in JavaScript. The screen formats the string; it never does maths on it.
+ *
+ * The window defaults to THIS MONTH ({@link monthWindow}) when the caller omits
+ * it, and a malformed window is refused as `invalid`. The list is BOUNDED
+ * ({@link ON_HAND_LIMIT}) and `truncated` says when there is more.
+ */
+export async function getUsageReport(
+  db: Queryable,
+  cookie: string | undefined | null,
+  window: UsageWindow = {},
+): Promise<UsageReportOutcome> {
+  const user = await currentUser(db, cookie);
+  if (!user) {
+    return { ok: false, error: 'unauthenticated' };
+  }
+  // A branch user — and any role that is neither owner nor warehouse_manager —
+  // is refused before any money is read.
+  if (!canApproveOrIssue(user.role)) {
+    return { ok: false, error: 'forbidden' };
+  }
+
+  const fallback = monthWindow();
+  const from = (window.from ?? '').trim() || fallback.from;
+  const to = (window.to ?? '').trim() || fallback.to;
+  if (!isValidWindow(from, to)) {
+    return { ok: false, error: 'invalid' };
+  }
+
+  // Ask for ONE row more than the bound, so truncation is provable without a
+  // second COUNT query (the same trick the stock list uses).
+  const fetched = await usageByBranch(db, { from, to, limit: ON_HAND_LIMIT + 1 });
+  const truncated = fetched.length > ON_HAND_LIMIT;
+  const rows = truncated ? fetched.slice(0, ON_HAND_LIMIT) : fetched;
+  const totalEgp = await usageTotalEgp(db, { from, to });
+
+  return { ok: true, scope: 'network', from, to, rows, totalEgp, truncated };
 }

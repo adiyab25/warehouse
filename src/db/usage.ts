@@ -134,6 +134,8 @@ export interface UsageRow {
   branch: string;
   variantId: string;
   sku: string;
+  /** The item's Arabic name — so the accounts view names WHAT was used. */
+  nameAr: string;
   /** The issued quantity, an exact `numeric` STRING. */
   issuedQty: string;
   /** `issuedQty × item cost`, computed IN SQL as `numeric(12,2)` — e.g. '600.00'. */
@@ -171,6 +173,7 @@ export async function usageByBranch(db: Queryable, filter: UsageFilter): Promise
     `select l.name_ar as "branch",
             m.variant_id as "variantId",
             v.sku as "sku",
+            i.name_ar as "nameAr",
             sum(m.qty)::numeric(12,3) as "issuedQty",
             sum(m.qty * i.cost_egp)::numeric(12,2) as "valueEgp"
        from stock_movements m
@@ -181,12 +184,42 @@ export async function usageByBranch(db: Queryable, filter: UsageFilter): Promise
         and m.occurred_at >= $1
         and m.occurred_at < $2
         and ($3::uuid is null or m.to_location_id = $3)
-      group by l.name_ar, m.variant_id, v.sku
+      group by l.name_ar, m.variant_id, v.sku, i.name_ar
       order by l.name_ar, v.sku, m.variant_id
       limit $4`,
     [filter.from, filter.to, filter.branchLocationId ?? null, filter.limit ?? ON_HAND_LIMIT],
   );
   return rows;
+}
+
+/**
+ * The TOTAL value of stock issued to branches in the window, per the SAME rule
+ * {@link usageByBranch} rows carry — `sum(qty * items.cost_egp)::numeric(12,2)`.
+ *
+ * This is a COST figure, not a selling price: it is what the network PAID for
+ * the stock that left the warehouse. It is computed in SQL, never summed in
+ * JavaScript — a JS float sum of the rows' `valueEgp` strings (`0.1 + 0.2`)
+ * yields `0.30000000000000004`, which an owner's accounts will not accept. An
+ * empty window sums to `'0.00'` (coalesced), so the screen shows a real zero
+ * rather than a blank.
+ *
+ * Call it with the scoped `db` from inside `withTenant`.
+ */
+export async function usageTotalEgp(
+  db: Queryable,
+  filter: { from: string | Date; to: string | Date },
+): Promise<string> {
+  const { rows } = await db.query<{ total: string }>(
+    `select coalesce(sum(m.qty * i.cost_egp), 0)::numeric(12,2) as "total"
+       from stock_movements m
+       join item_variants v on v.id = m.variant_id and v.tenant_id = m.tenant_id
+       join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
+      where m.reason = 'issue_to_branch'
+        and m.occurred_at >= $1
+        and m.occurred_at < $2`,
+    [filter.from, filter.to],
+  );
+  return rows[0]?.total ?? '0.00';
 }
 
 /** One movement of a variant, as the "where did it go" screen shows it. */

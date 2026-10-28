@@ -593,3 +593,62 @@ p[role="alert"] {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/*
+ * THE ACCOUNTS VIEW (Task 15) — the usage-and-value screen at `/stock/usage`.
+ *
+ * Layout only, and NO field styling (the shared rules paint every control).
+ * Same width discipline as the stock screens: a catalogue string (an item name,
+ * a branch name, a SKU) is a right-to-left or unbroken token in a flex item, so
+ * every one below carries `min-width: 0` and `overflow-wrap: anywhere` or a long
+ * name blows a 390px phone.
+ */
+
+.stock-usage-note,
+.stock-usage-window {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-usage-window {
+  font-weight: 600;
+}
+
+.stock-usage-item {
+  padding: 0.75rem;
+}
+
+.stock-usage-head,
+.stock-usage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.stock-usage-head .stock-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.stock-location,
+.stock-qty,
+.stock-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The whole-network total: the database's own sum, stated boldly and alone. */
+.stock-usage-total {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-block: 1rem;
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

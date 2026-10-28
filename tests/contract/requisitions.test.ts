@@ -8,6 +8,8 @@ import { createItem } from '../../src/db/items.ts';
 import { createLocation, transitLocation } from '../../src/db/locations.ts';
 import { onHand } from '../../src/db/movements.ts';
 import { approve, close, confirmReceipt, createRequisition, issue, reject } from '../../src/db/requisitions.ts';
+import { createSession } from '../../src/auth/session.ts';
+import { getRequisition } from '../../src/app/requisitions/handler.ts';
 import { migrateUrl, sqlTestUrl, withDb } from '../harness/sql.ts';
 
 /**
@@ -90,6 +92,7 @@ after(async () => {
     await owner.query('delete from location_levels where tenant_id = any($1)', [provisionedTenants]);
     await owner.query('delete from item_variants where tenant_id = any($1)', [provisionedTenants]);
     await owner.query('delete from items where tenant_id = any($1)', [provisionedTenants]);
+    await owner.query('delete from sessions where tenant_id = any($1)', [provisionedTenants]);
     await owner.query('delete from app_users where tenant_id = any($1)', [provisionedTenants]);
     await owner.query('delete from locations where tenant_id = any($1)', [provisionedTenants]);
     await owner.query('delete from tenants where id = any($1)', [provisionedTenants]);
@@ -140,7 +143,7 @@ test('issuing writes two movements through transit', { skip: !sqlTestUrl() }, as
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
     const result = await withTenant(db, t1, (tdb) =>
-      issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
     assert.equal(result.status, 'issued', 'issuing every line in full makes the requisition `issued`');
 
@@ -192,10 +195,10 @@ test('confirming moves stock from transit to the branch', { skip: !sqlTestUrl() 
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
 
     const result = await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
     assert.equal(result.status, 'received', 'confirming receipt makes the requisition `received`');
 
@@ -232,7 +235,7 @@ test("stock in transit is not yet the branch's", { skip: !sqlTestUrl() }, async 
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 7 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 7 }]));
 
     // Between issue and confirm, the branch's on-hand is ZERO — the number the
     // branch actually sees for its own stock. A loss on the road is therefore a
@@ -268,7 +271,7 @@ test('a partial issue leaves the line open and sets partially_issued', { skip: !
 
     // Issue ONLY the first line. The second line's goods have not left yet.
     const partial = await withTenant(db, t1, (tdb) =>
-      issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 10 }]),
+      issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 10 }]),
     );
     assert.equal(partial.status, 'partially_issued', 'an incomplete issue must NOT mark the requisition complete');
 
@@ -292,7 +295,7 @@ test('a partial issue leaves the line open and sets partially_issued', { skip: !
 
     // Issue the remaining line: the requisition completes to `issued`.
     const completion = await withTenant(db, t1, (tdb) =>
-      issue(tdb, req.id, [{ variantId: second.variant.id, qty: 20 }]),
+      issue(tdb, req.id, u1, [{ variantId: second.variant.id, qty: 20 }]),
     );
     assert.equal(completion.status, 'issued', 'once EVERY line is issued the requisition is `issued`');
   });
@@ -315,12 +318,12 @@ test('confirming more than was issued is refused, naming the state', { skip: !sq
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
 
     await assert.rejects(
       () =>
         withTenant(db, t1, (tdb) =>
-          confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 6 }]),
+          confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 6 }]),
         ),
       /issued/,
       'confirming 6 against an issued 5 must be refused, naming the state',
@@ -372,9 +375,9 @@ test('confirming twice posts once (idempotency)', { skip: !sqlTestUrl() }, async
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
     await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
 
     // Simulate the racing retry that read the requisition before it was marked
@@ -396,7 +399,7 @@ test('confirming twice posts once (idempotency)', { skip: !sqlTestUrl() }, async
     }
 
     await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
 
     const transit = await withTenant(db, t1, (tdb) => transitLocation(tdb));
@@ -505,7 +508,7 @@ test('a requisition that has written movements cannot be deleted', { skip: !sqlT
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, issuedReq.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, issuedReq.id, [{ variantId: ctx.variantId, qty: 10 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, issuedReq.id, u1, [{ variantId: ctx.variantId, qty: 10 }]));
 
     await assert.rejects(
       () =>
@@ -566,9 +569,9 @@ test('a requisition never runs backwards and closed is terminal', { skip: !sqlTe
     );
 
     // Drive the legal forward path to `received` ...
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
     await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 5 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
     );
 
     // ... and `received -> closed` is allowed (a legal forward step).
@@ -626,7 +629,7 @@ test('an already-approved requisition cannot be approved again', { skip: !sqlTes
     await assert.rejects(
       () =>
         withTenant(db, t1, (tdb) =>
-          confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 1 }]),
+          confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 1 }]),
         ),
       /cannot be confirmed.*status is 'approved'/,
       'an approved requisition has no stock in transit to confirm',
@@ -652,7 +655,7 @@ test('a partial issue is topped up to complete the line and the requisition', { 
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
 
-    const first = await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 6 }]));
+    const first = await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 6 }]));
     assert.equal(first.status, 'partially_issued', 'a 6-of-10 issue leaves the requisition open');
 
     await withTenant(db, t1, async (tdb) => {
@@ -665,7 +668,7 @@ test('a partial issue is topped up to complete the line and the requisition', { 
     });
 
     // The TOP-UP: the same line, its REMAINING 4 units. This must be accepted.
-    const second = await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 4 }]));
+    const second = await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 4 }]));
     assert.equal(second.status, 'issued', 'topping the line up to its target makes the requisition `issued`');
 
     await withTenant(db, t1, async (tdb) => {
@@ -685,7 +688,7 @@ test('a partial issue is topped up to complete the line and the requisition', { 
 
       // A third attempt to issue past the target is refused, not silently dropped.
       await assert.rejects(
-        () => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 1 }]),
+        () => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 1 }]),
         /cannot be issued|already fulfilled|cannot issue/,
         'issuing beyond the target is refused',
       );
@@ -711,10 +714,10 @@ test('a partially-issued requisition can be confirmed for what arrived', { skip:
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 6 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 6 }]));
 
     const confirmed = await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 6 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 6 }]),
     );
     // The rule: the header is `received` only when every line is fulfilled AND
     // every issued unit has arrived; here the line still needs 4 more issued, so
@@ -738,9 +741,9 @@ test('a partially-issued requisition can be confirmed for what arrived', { skip:
     });
 
     // Finish it: top the line up to 10, then confirm the remaining 4.
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 4 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 4 }]));
     const done = await withTenant(db, t1, (tdb) =>
-      confirmReceipt(tdb, req.id, [{ variantId: ctx.variantId, qty: 4 }]),
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 4 }]),
     );
     assert.equal(done.status, 'received', 'once everything is issued AND received the requisition is `received`');
 
@@ -768,8 +771,8 @@ test('an issue leg retried moves stock once (cumulative-key idempotency)', { ski
       }),
     );
     await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 6 }]));
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 4 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 6 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 4 }]));
 
     await withTenant(db, t1, async (tdb) => {
       const { rows } = await tdb.query<{ n: number }>(
@@ -793,7 +796,7 @@ test('an issue leg retried moves stock once (cumulative-key idempotency)', { ski
       await owner.end();
     }
 
-    await withTenant(db, t1, (tdb) => issue(tdb, req.id, [{ variantId: ctx.variantId, qty: 4 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 4 }]));
 
     await withTenant(db, t1, async (tdb) => {
       const { rows } = await tdb.query<{ n: number }>(
@@ -894,8 +897,8 @@ test('close finishes a received requisition, stamps closed_at, and is terminal',
 
     // Drive a requisition all the way to `received`, then close it.
     await withTenant(db, t1, (tdb) => approve(tdb, draft.id, u1));
-    await withTenant(db, t1, (tdb) => issue(tdb, draft.id, [{ variantId: ctx.variantId, qty: 5 }]));
-    await withTenant(db, t1, (tdb) => confirmReceipt(tdb, draft.id, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => issue(tdb, draft.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) => confirmReceipt(tdb, draft.id, u1, [{ variantId: ctx.variantId, qty: 5 }]));
 
     const closed = await withTenant(db, t1, (tdb) => close(tdb, draft.id, u1));
     assert.equal(closed.status, 'closed', 'close moves the header to `closed`');
@@ -914,6 +917,104 @@ test('close finishes a received requisition, stamps closed_at, and is terminal',
         [draft.id],
       );
       assert.equal(rows[0]!.status, 'closed', 'the refused close leaves the requisition closed');
+    });
+  });
+});
+
+// THE OWNER'S HEADLINE REQUIREMENT: "I should know who took what when". The
+// issue and confirm legs are HUMAN actions, so each movement must carry the id
+// of the person who performed it — the warehouse user who released the stock,
+// and the branch user who acknowledged its arrival. Before this, both legs
+// posted with a NULL actor and the stock screen honestly rendered "System" for a
+// human "Issue".
+test('issue and confirm record the acting user on the ledger, and the actor cannot be omitted', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  // A SECOND user, so the two legs are provably attributed to DIFFERENT people:
+  // a warehouse user issues, a branch user confirms. Created over the OWNER
+  // connection, exactly as `provision` does.
+  const owner = new Client({ connectionString: migrateUrl()! });
+  await owner.connect();
+  let u2: string;
+  try {
+    const {
+      rows: [u],
+    } = await owner.query<{ id: string }>(
+      "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'Warehouse T9', public.normalise_name('Warehouse T9'), 'wh_t9', 'warehouse_manager', 'x') returning id",
+      [t1],
+    );
+    u2 = u!.id;
+  } finally {
+    await owner.end();
+  }
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'ACTOR'));
+
+    const req = await withTenant(db, t1, (tdb) =>
+      createRequisition(tdb, {
+        branchLocationId: ctx.branch.id,
+        requestedBy: u1,
+        lines: [{ variantId: ctx.variantId, requestedQty: 5 }],
+      }),
+    );
+    await withTenant(db, t1, (tdb) => approve(tdb, req.id, u1));
+
+    // The warehouse user issues; the branch user confirms.
+    await withTenant(db, t1, (tdb) => issue(tdb, req.id, u2, [{ variantId: ctx.variantId, qty: 5 }]));
+    await withTenant(db, t1, (tdb) =>
+      confirmReceipt(tdb, req.id, u1, [{ variantId: ctx.variantId, qty: 5 }]),
+    );
+
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ actor_user_id: string | null; idempotency_key: string }>(
+        'select actor_user_id, idempotency_key from stock_movements where variant_id = $1 order by seq',
+        [ctx.variantId],
+      );
+      assert.equal(rows.length, 2, 'the flow posts exactly two movements');
+      const issueLeg = rows.find((r) => r.idempotency_key.includes(':issue:'));
+      const confirmLeg = rows.find((r) => r.idempotency_key.includes(':recv:'));
+      assert.ok(issueLeg && confirmLeg, 'both the issue and the confirm legs must be present');
+      assert.equal(issueLeg!.actor_user_id, u2, 'the ISSUE leg names the warehouse user who released the stock');
+      assert.equal(confirmLeg!.actor_user_id, u1, 'the CONFIRM leg names the branch user who confirmed receipt');
+      // The bug this fixes: a NULL actor rendered as "System" for a human action.
+      assert.notEqual(issueLeg!.actor_user_id, null, 'the issue actor must never be NULL');
+      assert.notEqual(confirmLeg!.actor_user_id, null, 'the confirm actor must never be NULL');
+    });
+
+    // A caller CANNOT omit the actor: `actorUserId` is a REQUIRED parameter, and
+    // an empty one is refused loudly rather than silently posting a NULL actor.
+    await assert.rejects(
+      () => withTenant(db, t1, (tdb) => issue(tdb, req.id, '', [{ variantId: ctx.variantId, qty: 1 }])),
+      /actorUserId must be a non-empty user id/,
+      'issue refuses an empty actor',
+    );
+    await assert.rejects(
+      () => withTenant(db, t1, (tdb) => confirmReceipt(tdb, req.id, '', [{ variantId: ctx.variantId, qty: 1 }])),
+      /actorUserId must be a non-empty user id/,
+      'confirmReceipt refuses an empty actor',
+    );
+  });
+});
+
+// ITEM 3 (requisition detail route): `/requisitions/<non-uuid>` had the same
+// hole as `/stock/<non-uuid>` — the id reached `where r.id = $1` uncast and
+// Postgres rejected the text with SQLSTATE 22P02 (a 500). It is guarded by
+// SHAPE now, at the handler seam, and answers the SAME `invalid` a missing id
+// gets — proved HERE by calling the handler directly.
+test('a malformed requisition id is refused by the handler, not a 500', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provision();
+
+  await withDb(async (db) => {
+    const token = await withTenant(db, t1, async (tdb) => (await createSession(tdb, { userId: u1 })).token);
+
+    await withTenant(db, t1, async (tdb) => {
+      const out = await getRequisition(tdb, token, 'not-a-uuid');
+      assert.deepEqual(out, { ok: false, error: 'invalid' }, 'a malformed id must be a refusal, not a throw');
+
+      // A well-formed but unknown id is refused the SAME way (no oracle).
+      const unknown = await getRequisition(tdb, token, '00000000-0000-0000-0000-000000000000');
+      assert.deepEqual(unknown, { ok: false, error: 'invalid' });
     });
   });
 });

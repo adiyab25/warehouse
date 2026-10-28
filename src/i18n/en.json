@@ -147,5 +147,20 @@
   "stock.reason.opening_balance": "Opening balance",
   "stock.error.unauthenticated": "Your session has ended. Sign in again.",
   "stock.error.forbidden": "Stock screens are available to the warehouse and to an authorised branch only.",
-  "stock.error.invalid": "Check the item you asked for."
+  "stock.error.invalid": "Check the item you asked for.",
+  "stock.usage.heading": "Usage and value by branch",
+  "stock.usage.subtitle": "The value of stock issued from the warehouse to branches in the selected window.",
+  "stock.usage.cost_note": "Value is at COST (what the warehouse paid), not a selling price.",
+  "stock.usage.from": "From",
+  "stock.usage.to": "To",
+  "stock.usage.submit": "Show",
+  "stock.usage.window": "Window: {from} to {to}",
+  "stock.usage.default_window": "The default window is this month.",
+  "stock.usage.branch": "Branch",
+  "stock.usage.item": "Item",
+  "stock.usage.sku": "Code",
+  "stock.usage.qty": "Issued quantity",
+  "stock.usage.total": "Total",
+  "stock.usage.empty": "Nothing was issued to branches in this window.",
+  "stock.usage.truncated": "Showing the first {count} rows — narrow the window to see beyond this."
 }

@@ -123,7 +123,7 @@ export async function createItem(
         discrete, cost_egp, supplier, lead_time_days, serialised)
      values
        (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, $3, $4, $5, $6,
-        coalesce($7, true), coalesce($8, 0), $9, $10, coalesce($11, false))
+        coalesce($7, true), coalesce($8::numeric, 0), $9, $10, coalesce($11, false))
      returning *`,
     [
       input.nameAr,

@@ -584,3 +584,49 @@ test('a raw insert of a non-normalised barcode is refused', { skip: !sqlTestUrl(
     });
   });
 });
+
+// ITEM COST MUST HOLD PIASTERS. `createItem` writes `coalesce($cost, 0)`, and
+// the untyped integer literal `0` unified the parameter to INTEGER — so a
+// fractional cost (120.50 EGP) threw
+// `invalid input syntax for type integer: "120.5"` (SQLSTATE 22P02) even though
+// `items.cost_egp` is `numeric(12,2)` and has always allowed it. The cast
+// `coalesce($cost::numeric, 0)` fixes it; this test pins a fractional cost
+// round-tripping EXACTLY, and an omitted cost defaulting to 0.00.
+test('createItem stores a fractional cost exactly, and a missing cost defaults to 0.00', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provision();
+
+  await withDb(async (db) => {
+    const priced = await withTenant(db, t1, (tdb) =>
+      createItem(tdb, {
+        nameAr: 'كتاب',
+        nameEn: 'Book',
+        family: 'sellable',
+        costEgp: 120.5,
+        sku: 'BK-1',
+        barcode: 'BK-1',
+      }),
+    );
+    // The row the writer RETURNED carries the exact numeric string.
+    assert.equal(priced.item.cost_egp, '120.50', 'a fractional cost is stored and returned as 120.50');
+    // ...and so does a fresh read, so it is the STORED value, not the echo.
+    await withTenant(db, t1, async (tdb) => {
+      const { rows } = await tdb.query<{ cost_egp: string }>(
+        'select cost_egp from items where id = $1',
+        [priced.item.id],
+      );
+      assert.equal(rows[0]!.cost_egp, '120.50', 'the stored cost is exactly 120.50');
+      // Prove the database stores it as a NUMERIC, not an integer that rounded.
+      const { rows: t } = await tdb.query<{ t: string }>(
+        'select pg_typeof(cost_egp)::text as t from items where id = $1',
+        [priced.item.id],
+      );
+      assert.equal(t[0]!.t, 'numeric', 'cost_egp is a numeric column');
+    });
+
+    // An omitted cost is still 0.00 — the default did not regress to NULL.
+    const free = await withTenant(db, t1, (tdb) =>
+      createItem(tdb, { nameAr: 'هدية', nameEn: 'Gift', family: 'sellable', sku: 'GF-1', barcode: 'GF-1' }),
+    );
+    assert.equal(free.item.cost_egp, '0.00', 'an omitted cost defaults to 0.00');
+  });
+});

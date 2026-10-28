@@ -13,10 +13,11 @@ import {
   movementHistoryDetailed,
   onHandByLocation,
   usageByBranch,
+  usageTotalEgp,
 } from '../../src/db/usage.ts';
 import { MOVEMENT_REASONS, REASON_MESSAGE_KEYS } from '../../src/domain/movement.ts';
 import { hasKey } from '../../src/i18n/index.ts';
-import { getVariantHistory, listStock } from '../../src/app/stock/handler.ts';
+import { getUsageReport, getVariantHistory, listStock, monthWindow } from '../../src/app/stock/handler.ts';
 import { migrateUrl, sqlTestUrl, withDb } from '../harness/sql.ts';
 
 /**
@@ -491,4 +492,138 @@ test('every movement reason has an Arabic and English label', () => {
     assert.ok(hasKey(key, 'ar'), `reason ${reason} has no Arabic label (${key})`);
     assert.ok(hasKey(key, 'en'), `reason ${reason} has no English label (${key})`);
   }
+});
+
+// ITEM 3: a malformed variant id in the URL (`/stock/not-a-uuid`) must be a
+// gracefUL refusal — the SAME code a missing id gets — not a 500. Before this,
+// the id reached `where v.id = $1` uncast and Postgres rejected the text with
+// `invalid input syntax for type uuid` (SQLSTATE 22P02), surfacing as Next's
+// "This page couldn't load".
+test('a malformed variant id is refused, not a 500', { skip: !sqlTestUrl() }, async () => {
+  const p = await seeded();
+  await withDb(async (db) => {
+    // A live session, so the ONLY reason the read is refused is the id's SHAPE
+    // (a garbage cookie would refuse as `unauthenticated`, which is not the bug).
+    const token = await withTenant(db, p.tenant, async (tdb) => (await createSession(tdb, { userId: p.wm })).token);
+
+    await withTenant(db, p.tenant, async (tdb) => {
+      const malformed = await getVariantHistory(tdb, token, 'not-a-uuid');
+      assert.deepEqual(malformed, { ok: false, error: 'invalid' }, 'a malformed id must be a refusal, not a throw');
+
+      // A well-formed but unknown id is refused the SAME way (no oracle).
+      const unknown = await getVariantHistory(tdb, token, '00000000-0000-0000-0000-000000000000');
+      assert.deepEqual(unknown, { ok: false, error: 'invalid' });
+
+      // A genuinely malformed id CANNOT reach the database: prove the raw query
+      // is exactly what used to 500 the page, so the guard (not luck) protects it.
+      await assert.rejects(
+        () => tdb.query('select id from item_variants where id = $1', ['not-a-uuid']),
+        /invalid input syntax for type uuid/,
+        'the raw query is what used to 500 the page — the shape guard is what prevents it',
+      );
+    });
+  });
+});
+
+// ITEM 4: THE ACCOUNTS VIEW. `getUsageReport` is the whole-network money read.
+//  - the TOTAL is exact in SQL (a JS float sum would differ),
+//  - the window actually filters,
+//  - a branch_user is refused SERVER-SIDE, and
+//  - an empty window renders honestly (rows empty, total a real '0.00').
+test('the accounts view sums value in SQL, filters by window, and refuses a branch user', { skip: !sqlTestUrl() }, async () => {
+  const p = await seeded();
+
+  // Two issues in a FIXED past window (2026-01), so the "now"-dated seed
+  // movements are excluded by the window filter — which is what proves the
+  // filter filters. Costs 0.10 and 0.20 are chosen so a JS float sum
+  // (0.1 + 0.2 = 0.30000000000000004) differs from the exact '0.30'.
+  const WINDOW = { from: '2026-01-01', to: '2026-02-01' };
+  await withDb(async (db) => {
+    await withTenant(db, p.tenant, async (tdb) => {
+      const { rows: locs } = await tdb.query<{ id: string; code: string }>(
+        "select id, code from locations where code in ('WH-T15', 'BR-T15A', 'BR-T15B')",
+      );
+      const wh = locs.find((l) => l.code === 'WH-T15')!.id;
+      const brA = locs.find((l) => l.code === 'BR-T15A')!.id;
+      const brB = locs.find((l) => l.code === 'BR-T15B')!.id;
+
+      // Fractional costs through createItem — the ITEM 2 fix in the same suite.
+      const a = await createItem(tdb, { nameAr: 'صنف عشرة', family: 'sellable', costEgp: 0.1, sku: 'T15-0410', barcode: 'T15-0410' });
+      const b = await createItem(tdb, { nameAr: 'صنف عشرين', family: 'sellable', costEgp: 0.2, sku: 'T15-0420', barcode: 'T15-0420' });
+      assert.equal(a.item.cost_egp, '0.10', 'a 0.10 cost is stored exactly');
+      assert.equal(b.item.cost_egp, '0.20', 'a 0.20 cost is stored exactly');
+
+      await postMovement(tdb, {
+        variantId: a.variant.id, qty: 1, reason: 'issue_to_branch',
+        fromLocationId: wh, toLocationId: brA, actorUserId: p.wm, occurredAt: '2026-01-10T10:00:00Z',
+      });
+      await postMovement(tdb, {
+        variantId: b.variant.id, qty: 1, reason: 'issue_to_branch',
+        fromLocationId: wh, toLocationId: brB, actorUserId: p.wm, occurredAt: '2026-01-20T10:00:00Z',
+      });
+    });
+
+    const tokens = await withTenant(db, p.tenant, async (tdb) => ({
+      wm: (await createSession(tdb, { userId: p.wm })).token,
+      bu1: (await createSession(tdb, { userId: p.bu1 })).token,
+    }));
+
+    await withTenant(db, p.tenant, async (tdb) => {
+      // The warehouse manager may read it.
+      const report = await getUsageReport(tdb, tokens.wm, WINDOW);
+      assert.equal(report.ok, true, 'the warehouse manager may read the accounts view');
+      if (!report.ok) return;
+
+      // THE TOTAL IS EXACT IN SQL: '0.30', never the JS float 0.30000000000000004.
+      assert.equal(report.totalEgp, '0.30', 'the total is the database sum, exactly');
+      const jsFloatSum = report.rows.reduce((s, r) => s + Number(r.valueEgp), 0);
+      assert.notEqual(
+        String(jsFloatSum),
+        report.totalEgp,
+        'a JS float sum of the rows differs from the SQL total — so this test fails if the total leaves the database',
+      );
+      // The rows name WHAT and WHERE and carry exact strings.
+      assert.equal(report.rows.length, 2, 'two issues in the window are two rows');
+      for (const row of report.rows) {
+        assert.ok(row.branch.length > 0, 'the branch is named');
+        assert.ok(row.nameAr.length > 0, 'the item is named');
+        assert.ok(row.sku.length > 0, 'the SKU is carried');
+      }
+
+      // The same SQL total read directly agrees (one rule, no drift).
+      const direct = await usageTotalEgp(tdb, WINDOW);
+      assert.equal(direct, '0.30', 'usageTotalEgp agrees with the handler total');
+
+      // THE WINDOW FILTERS: a different window holds none of these issues, and
+      // the total is a real '0.00' — not a blank.
+      const past = await getUsageReport(tdb, tokens.wm, { from: '2000-01-01', to: '2000-02-01' });
+      assert.equal(past.ok, true);
+      if (past.ok) {
+        assert.equal(past.rows.length, 0, 'a window with no issues is empty');
+        assert.equal(past.totalEgp, '0.00', 'an empty window sums to a real 0.00');
+      }
+
+      // The window the form offers by default is THIS MONTH, stated, not guessed.
+      const w = monthWindow(new Date(Date.UTC(2026, 9, 28)));
+      assert.deepEqual(w, { from: '2026-10-01', to: '2026-11-01' }, 'the default window is this month');
+
+      // A BRANCH USER IS REFUSED SERVER-SIDE — whole-network money is not a
+      // branch-level fact.
+      const denied = await getUsageReport(tdb, tokens.bu1, WINDOW);
+      assert.deepEqual(denied, { ok: false, error: 'forbidden' }, 'a branch user is refused the network money view');
+      // ...and an anonymous request too.
+      const anon = await getUsageReport(tdb, 'not-a-real-token', WINDOW);
+      assert.deepEqual(anon, { ok: false, error: 'unauthenticated' });
+
+      // A malformed window is refused, and the default is applied when omitted.
+      const bad = await getUsageReport(tdb, tokens.wm, { from: 'not-a-date', to: 'also-bad' });
+      assert.deepEqual(bad, { ok: false, error: 'invalid' });
+      const defaulted = await getUsageReport(tdb, tokens.wm, {});
+      assert.equal(defaulted.ok, true);
+      if (defaulted.ok) {
+        assert.equal(defaulted.from, monthWindow().from, 'an omitted window defaults to this month');
+        assert.equal(defaulted.to, monthWindow().to);
+      }
+    });
+  });
 });

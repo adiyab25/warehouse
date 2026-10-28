@@ -1,5 +1,6 @@
 import { currentUser, type CurrentUser } from '../../auth/current-user.ts';
 import type { Queryable } from '../../db/client.ts';
+import { isUuid } from '../../domain/ids.ts';
 import {
   approve,
   confirmReceipt,
@@ -396,7 +397,9 @@ export async function getRequisition(
   const user = await currentUser(db, cookie);
   if (!user) return { ok: false, error: 'unauthenticated' };
   if (!canRequest(user.role) && !canApproveOrIssue(user.role)) return { ok: false, error: 'forbidden' };
-  if (typeof id !== 'string' || id.trim() === '') return { ok: false, error: 'invalid' };
+  // A malformed id gets the SAME refusal a missing one does — the shape is
+  // checked BEFORE the query, so an uncastable text id cannot 500 the page.
+  if (!isUuid(id)) return { ok: false, error: 'invalid' };
 
   const { rows } = await db.query<{
     id: string;
@@ -782,7 +785,7 @@ export async function issueIn(
   cookie: string | undefined | null,
   form: FlowForm,
 ): Promise<{ status: RequisitionStatus }> {
-  await requireWarehouse(db, cookie);
+  const user = await requireWarehouse(db, cookie);
   requireFlowForm(form, 'issueIn');
 
   // Take the header lock FIRST, so the reconciliation and the write are one
@@ -833,6 +836,7 @@ export async function issueIn(
   const result = await issue(
     db,
     form.id,
+    user.userId,
     form.lines.map((line) => ({ variantId: line.variantId, qty: line.qty })),
   );
   return { status: result.status };
@@ -860,7 +864,7 @@ export async function confirmIn(
   cookie: string | undefined | null,
   form: FlowForm,
 ): Promise<{ status: RequisitionStatus }> {
-  const { branchLocationId } = await requireBranch(db, cookie);
+  const { user, branchLocationId } = await requireBranch(db, cookie);
   requireFlowForm(form, 'confirmIn');
 
   const requisition = await lockRequisition(db, form.id, 'confirmIn');
@@ -921,6 +925,7 @@ export async function confirmIn(
   const result = await confirmReceipt(
     db,
     form.id,
+    user.userId,
     form.lines.map((line) => ({ variantId: line.variantId, qty: line.qty })),
   );
   return { status: result.status };

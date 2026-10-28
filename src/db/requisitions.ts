@@ -241,13 +241,26 @@ export async function approve(
  * `qty` values are validated as finite numbers > 0 before anything is written
  * (numeric(12,3) would round a bad one silently, so the validator is the gate).
  *
+ * `actorUserId` is REQUIRED — a user id — and written to EVERY movement's
+ * `actor_user_id` through `postMovement`, so the ledger records WHO released the
+ * stock; it can never silently become a system movement (the owner's question is
+ * literally "who took what when"). It mirrors the sibling writers
+ * (`approve`/`reject`/`close`/`returnRequisition`), which all require an actor.
+ *
  * Call it with the scoped `db` from inside `withTenant`; never nest `withTenant`.
  */
 export async function issue(
   db: Queryable,
   id: string,
+  actorUserId: string,
   lines: IssueLine[],
 ): Promise<{ status: RequisitionStatus }> {
+  if (typeof actorUserId !== 'string' || actorUserId.trim() === '') {
+    throw new Error(
+      `issue: actorUserId must be a non-empty user id (got ${JSON.stringify(actorUserId)})`,
+    );
+  }
+
   const requisition = await lockForFlow(db, id, 'issue');
   if (requisition.status !== 'approved' && requisition.status !== 'partially_issued') {
     throw new Error(
@@ -290,6 +303,7 @@ export async function issue(
       reason: 'issue_to_branch',
       fromLocationId: warehouse.id,
       toLocationId: transit.id,
+      actorUserId,
       refType: 'REQUISITION',
       refId: id,
       idempotencyKey: issueKey(id, line.variantId, issuedAfter),
@@ -360,13 +374,25 @@ export async function issue(
  *
  * `qty` values are validated as finite numbers > 0 before anything is written.
  *
+ * `actorUserId` is REQUIRED — a user id — and written to EVERY movement's
+ * `actor_user_id` through `postMovement`, so the branch leg names the PERSON who
+ * confirmed the delivery (the branch user), never a system label. It mirrors the
+ * sibling writers, which all require an actor.
+ *
  * Call it with the scoped `db` from inside `withTenant`; never nest `withTenant`.
  */
 export async function confirmReceipt(
   db: Queryable,
   id: string,
+  actorUserId: string,
   lines: ConfirmLine[],
 ): Promise<{ status: RequisitionStatus }> {
+  if (typeof actorUserId !== 'string' || actorUserId.trim() === '') {
+    throw new Error(
+      `confirmReceipt: actorUserId must be a non-empty user id (got ${JSON.stringify(actorUserId)})`,
+    );
+  }
+
   const requisition = await lockForFlow(db, id, 'confirmReceipt');
   if (!canConfirm(requisition.status as RequisitionStatus)) {
     throw new Error(
@@ -402,6 +428,7 @@ export async function confirmReceipt(
       reason: 'issue_to_branch',
       fromLocationId: transit.id,
       toLocationId: requisition.branch_location_id,
+      actorUserId,
       refType: 'REQUISITION',
       refId: id,
       idempotencyKey: receiveKey(id, line.variantId, receivedAfter),

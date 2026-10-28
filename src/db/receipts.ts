@@ -297,6 +297,7 @@ export async function postReceipt(
         reason: 'receipt',
         fromLocationId: receipt.source_location_id,
         toLocationId: receipt.dest_location_id,
+        actorUserId: receivedBy,
         refType: 'RECEIPT',
         refId: receiptId,
         idempotencyKey: receiptLineKey(receiptId, line.variantId),
