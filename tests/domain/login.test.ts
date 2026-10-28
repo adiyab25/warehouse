@@ -1,38 +1,70 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { LOCKOUT_THRESHOLD, LOCKOUT_WINDOW_MS, signIn } from '../../src/auth/login.ts';
+import {
+  LOCKOUT_THRESHOLD,
+  LOCKOUT_WINDOW_MS,
+  parseLockoutConfig,
+  signIn,
+} from '../../src/auth/login.ts';
 import { hashPassword } from '../../src/auth/password.ts';
 import type { Queryable } from '../../src/db/client.ts';
 
 /**
- * The PURE half of sign-in — no database, so it can prove the two decisions
- * that are easy to get subtly wrong and impossible to see from the happy path:
+ * The PURE half of sign-in — no database, so it can prove the decisions that
+ * are easy to get subtly wrong and impossible to see from the happy path:
  *
  *   (1) The lockout governor is CONFIGURATION, not a magic number sprinkled
  *       through the code. Both thresholds are exported constants so a test (and
- *       an operator reading the code) can see exactly what "too many" means.
+ *       an operator reading the code) can see exactly what "too many" means, and
+ *       they are READ FROM THE ENVIRONMENT with the v1 values as defaults.
  *
- *   (2) The UNKNOWN-USER path is CONSTANT-TIME. If a supplied name does not
+ *   (2) The UNKNOWN-USER path is CONSTANT-TIME. If a supplied username does not
  *       exist, sign-in must still run the password KDF against a fixed DUMMY
  *       hash exactly as it would for a real user with a wrong password.
  *       Comparing a password ONLY when the user is found makes the unknown-user
  *       reply measurably faster, which turns the endpoint into a free oracle
- *       for enumerating which names exist. This test injects a stub
+ *       for enumerating which usernames exist. This test injects a stub
  *       `verifyPassword` and asserts it is invoked once on BOTH paths.
  */
 
 test('the lockout threshold and window are exported constants', () => {
-  assert.equal(LOCKOUT_THRESHOLD, 5, 'the lockout threshold must be exactly 5 failures');
+  assert.equal(LOCKOUT_THRESHOLD, 5, 'the lockout threshold must default to 5 failures');
   assert.ok(Number.isInteger(LOCKOUT_THRESHOLD), 'the threshold must be an integer');
   assert.equal(
     LOCKOUT_WINDOW_MS,
     15 * 60 * 1000,
-    'the lockout window must be exactly 15 minutes, expressed in milliseconds',
+    'the lockout window must default to exactly 15 minutes, expressed in milliseconds',
   );
 });
 
-test('an unknown user takes the same path as a wrong password', async () => {
+test('the lockout governor is environment configuration, and a bad value cannot disable it', () => {
+  // The defaults, when nothing is configured.
+  assert.deepEqual(parseLockoutConfig({}), { threshold: 5, windowMs: 15 * 60 * 1000 });
+
+  // A deployment may tune both.
+  assert.deepEqual(parseLockoutConfig({ LOCKOUT_THRESHOLD: '3', LOCKOUT_WINDOW_MS: '60000' }), {
+    threshold: 3,
+    windowMs: 60_000,
+  });
+
+  // ...but a typo, a zero, a negative or a float falls back to the default
+  // rather than silently switching the lockout off (0 would lock nobody out).
+  for (const bad of ['', '0', '-1', 'forever', '2.5', undefined]) {
+    assert.deepEqual(
+      parseLockoutConfig({ LOCKOUT_THRESHOLD: bad }),
+      { threshold: 5, windowMs: 15 * 60 * 1000 },
+      `LOCKOUT_THRESHOLD=${JSON.stringify(bad)} must fall back to the default`,
+    );
+    assert.deepEqual(
+      parseLockoutConfig({ LOCKOUT_WINDOW_MS: bad }),
+      { threshold: 5, windowMs: 15 * 60 * 1000 },
+      `LOCKOUT_WINDOW_MS=${JSON.stringify(bad)} must fall back to the default`,
+    );
+  }
+});
+
+test('an unknown username takes the same path as a wrong password', async () => {
   const realHash = await hashPassword('the-real-password');
 
   // --- Path A: the user does not exist. --------------------------------
@@ -48,7 +80,7 @@ test('an unknown user takes the same path as a wrong password', async () => {
 
   const unknown = await signIn(
     unknownDb,
-    { userLookup: 'ghost', password: 'whatever' },
+    { username: 'ghost_user', password: 'whatever' },
     {
       verifyPassword: async (_plain, hash) => {
         unknownKdfCalls += 1;
@@ -84,7 +116,7 @@ test('an unknown user takes the same path as a wrong password', async () => {
 
   const known = await signIn(
     knownDb,
-    { userLookup: 'someone', password: 'wrong' },
+    { username: 'owner_one', password: 'wrong' },
     {
       verifyPassword: async () => {
         knownKdfCalls += 1;

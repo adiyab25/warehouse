@@ -46,15 +46,15 @@ async function provision(): Promise<Provisioned> {
     } = await owner.query<{ id: string }>("insert into tenants (name) values ('Auth Two') returning id");
 
     const userIds: Record<string, string> = {};
-    for (const [id, name] of [
-      [t1!.id, 'Owner One'],
-      [t2!.id, 'Owner Two'],
+    for (const [id, name, username] of [
+      [t1!.id, 'Owner One', 'owner_one'],
+      [t2!.id, 'Owner Two', 'owner_two'],
     ] as const) {
       const {
         rows: [u],
       } = await owner.query<{ id: string }>(
-        "insert into app_users (tenant_id, name, role, password_hash) values ($1, $2, 'owner', 'x') returning id",
-        [id, name],
+        "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, $2, public.normalise_name($2), $3, 'owner', 'x') returning id",
+        [id, name, username],
       );
       userIds[id] = u!.id;
     }

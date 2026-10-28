@@ -3,11 +3,15 @@
   "app.description": "The inventory backbone — one warehouse feeding fourteen branches.",
   "home.title": "Home",
   "home.tagline": "Movements are the truth; on-hand is derived from them.",
+  "home.signed_in_as": "Signed in as {name}.",
+  "home.sign_out": "Sign out",
   "sign_in.title": "Sign in",
-  "sign_in.username": "Name",
+  "sign_in.username": "Username",
   "sign_in.password": "Password",
   "sign_in.submit": "Sign in",
-  "sign_in.error.invalid": "The name or password is incorrect.",
+  "sign_in.error.invalid": "The username or password is incorrect.",
   "sign_in.error.locked": "Sign-in is temporarily paused after repeated failed attempts. Try again later.",
-  "common.ltr_hint": "Codes and barcodes are written left to right."
+  "common.ltr_hint": "Codes and barcodes are written left to right.",
+  "cart.items.one": "There is {count} item in the basket.",
+  "cart.items.other": "There are {count} items in the basket."
 }

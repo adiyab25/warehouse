@@ -39,11 +39,11 @@ async function provision(): Promise<Provisioned> {
       "insert into tenants (name) values ('KG Two') returning id",
     );
     await owner.query(
-      "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'A', 'owner', 'x')",
+      "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'A', public.normalise_name('A'), 'user_a', 'owner', 'x')",
       [t1!.id],
     );
     await owner.query(
-      "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'B', 'owner', 'x')",
+      "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'B', public.normalise_name('B'), 'user_b', 'owner', 'x')",
       [t2!.id],
     );
     provisionedTenants.push(t1!.id, t2!.id);
@@ -122,14 +122,14 @@ test('an app_user can only be inserted for the current tenant', { skip: !sqlTest
   await withDb(async (db) => {
     await withTenant(db, t1, async (tdb) => {
       await tdb.query(
-        "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'C', 'branch_user', 'x')",
+        "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'C', public.normalise_name('C'), 'user_c', 'branch_user', 'x')",
         [t1],
       );
 
       await assert.rejects(
         () =>
           tdb.query(
-            "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'D', 'owner', 'x')",
+            "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'D', public.normalise_name('D'), 'user_d', 'owner', 'x')",
             [t2],
           ),
         /row-level security|violates row-level/i,
@@ -185,7 +185,7 @@ test('withTenant rolls back when fn throws', { skip: !sqlTestUrl() }, async () =
       () =>
         withTenant(db, t1, async (tdb) => {
           await tdb.query(
-            "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'Rollback Probe', 'owner', 'x')",
+            "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'Rollback Probe', public.normalise_name('Rollback Probe'), 'rollback_probe', 'owner', 'x')",
             [t1],
           );
           throw new Error('boom');
@@ -215,7 +215,7 @@ test('a nested withTenant throws and does not commit anything', { skip: !sqlTest
       () =>
         withTenant(db, t1, async (tdb) => {
           await tdb.query(
-            "insert into app_users (tenant_id, name, role, password_hash) values ($1, 'Nested Probe', 'owner', 'x')",
+            "insert into app_users (tenant_id, name, name_normalised, username, role, password_hash) values ($1, 'Nested Probe', public.normalise_name('Nested Probe'), 'nested_probe', 'owner', 'x')",
             [t1],
           );
 

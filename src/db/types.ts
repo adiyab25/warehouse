@@ -41,6 +41,8 @@ export interface AppUser {
   password_hash: string;
   active: boolean;
   created_at: Date;
+  username: string;
+  name_normalised: string;
 }
 
 export interface AppUserInsert {
@@ -52,6 +54,8 @@ export interface AppUserInsert {
   password_hash: string;
   active?: boolean;
   created_at?: Date;
+  username: string;
+  name_normalised: string;
 }
 
 export interface CountLine {

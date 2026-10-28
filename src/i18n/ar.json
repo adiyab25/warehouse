@@ -3,11 +3,19 @@
   "app.description": "الخلفية الرئيسية للمخزون — مخزن واحد يغذّي أربعة عشر فرعًا.",
   "home.title": "الرئيسية",
   "home.tagline": "الحركات هي الحقيقة؛ والرصيد مشتق منها.",
+  "home.signed_in_as": "مسجَّل الدخول باسم {name}.",
+  "home.sign_out": "تسجيل الخروج",
   "sign_in.title": "تسجيل الدخول",
-  "sign_in.username": "الاسم",
+  "sign_in.username": "اسم المستخدم",
   "sign_in.password": "كلمة المرور",
   "sign_in.submit": "دخول",
-  "sign_in.error.invalid": "الاسم أو كلمة المرور غير صحيحة.",
+  "sign_in.error.invalid": "اسم المستخدم أو كلمة المرور غير صحيحة.",
   "sign_in.error.locked": "تم إيقاف تسجيل الدخول مؤقتًا بعد محاولات فاشلة متكررة. حاول لاحقًا.",
-  "common.ltr_hint": "تُكتب الرموز والأكواد من اليسار إلى اليمين."
+  "common.ltr_hint": "تُكتب الرموز والأكواد من اليسار إلى اليمين.",
+  "cart.items.zero": "لا أصناف في السلة.",
+  "cart.items.one": "في السلة صنف واحد.",
+  "cart.items.two": "في السلة صنفان.",
+  "cart.items.few": "في السلة {count} أصناف.",
+  "cart.items.many": "في السلة {count} صنفًا.",
+  "cart.items.other": "في السلة {count} صنف."
 }

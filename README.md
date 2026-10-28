@@ -94,20 +94,47 @@ scoped to. A host/subdomain mapping is a **later, deliberate addition** for the
 SaaS end state (many tenants behind one host, resolved per request); making that
 choice should be an explicit design step, not a side effect of the auth shell.
 
-### Obligations the auth shell (Task 11) inherits
+### The auth shell (Task 11)
 
-These are recorded in `src/auth/session.ts` and are **required at sign-in but
-deliberately not implemented here** (no login route exists yet):
+Implemented in `src/auth/login.ts` (sign-in), `src/app/sign-in` (the form and
+the cookie it sets), `src/proxy.ts` + `src/app/page.tsx` (the session gate) and
+`src/app/sign-out/route.ts` (the way out):
 
-- **Rate limit and lockout on login** are not implemented. They must be added
-  with the login endpoint; an unthrottled password check is a free oracle.
-- The **unknown-user path must be constant-time**: on a username that does not
-  exist, still run the password KDF (`src/auth/password.ts`) against a fixed
-  dummy hash and fail, so response time cannot enumerate users.
+- **Identity is an ASSIGNED USERNAME, not a name.** `app_users.username` is
+  unique per tenant (`unique (tenant_id, username)`, migration 0012) and sign-in
+  matches on it exactly. A person's `name` is display data — two employees may
+  share one, and a lookup by name made them one account.
+- **Rate limit: a per-account LOCKOUT.** `LOCKOUT_THRESHOLD` failures inside
+  `LOCKOUT_WINDOW_MS` (env-configurable; defaults 5 / 15 minutes) refuse sign-in
+  *before the password is checked*, and while locked the attempt is **not
+  recorded** — so the lock cannot be extended by an attacker who keeps knocking
+  and it expires on its own. There is **no per-IP and no global limit**: an
+  attacker who knows a username can deny that one account sign-in for up to the
+  window. Accepted for v1 (recorded in `src/auth/login.ts`), with per-IP/global
+  limiting and lockout alerting left to a later task.
+- The **unknown-user path is constant-time**: on a username that does not exist,
+  sign-in still runs the password KDF (`src/auth/password.ts`) against a fixed
+  dummy hash, so response time cannot enumerate users — and an attempt is
+  recorded for an unknown username too, so it locks exactly like a real one.
+- **A success does not erase the evidence.** Failures are kept (the success is
+  its own marked row), and `login_attempts` is bounded by
+  `purge_login_attempts(interval)` (migration 0012) — tenant-scoped by
+  construction, and **not scheduled yet**: wiring it to a job is a later task.
+- **Names are normalised by one shared rule.** `src/domain/text.ts::normaliseName`
+  and SQL `public.normalise_name` are the same function (NFKC, tatweel stripped,
+  `أإآٱ→ا`, `ى→ي`, `ة→ه`, whitespace collapsed), and
+  `app_users.name_normalised` carries a CHECK against the SQL — so `أحمد علي`
+  and the ordinary `احمد علي` are one name, in the app and in the database.
+- The **session cookie** is `httpOnly`, `SameSite=Lax`, `path=/`, `Secure` in
+  production, expired with the session, and named `__Host-session` in production
+  (`src/auth/cookie.ts` explains why the name and the attributes must agree).
 - A **password change does not invalidate live sessions**. `readSession` looks at
   the session and the user's `active` flag, not the password hash, so existing
   sessions survive until they expire. If the shell wants them gone, it must
   explicitly set `revoked_at` on that user's sessions.
+- **Numerals are Latin everywhere** (`src/i18n`), in both languages, through
+  `formatNumber`/`formatCurrency`/`formatDate` — Arabic-Indic digits
+  (`١٬٢٣٤٫٥`) never match a printed barcode, an SKU or a receipt.
 
 ## Rules that outlive this task
 

@@ -12,18 +12,15 @@ import { generateToken, hashToken } from './token.ts';
  * an error.
  *
  * ---- NOTES REQUIRED BY TASK 11 (the auth shell) — deliberately NOT built here
- * There is no login route yet, so the following are DECISIONS recorded for the
- * shell rather than code in this module:
+ * This module is SESSION STORAGE only. The sign-in flow itself lives in
+ * src/auth/login.ts (constant-time unknown-user path, the per-account lockout)
+ * and the screens in src/app; the notes below are decisions that belong to
+ * session storage and are recorded here rather than silently assumed:
  *
- *   * NO RATE LIMIT AND NO LOCKOUT on sign-in. Acceptable for v1 (there is no
- *     login endpoint to protect), but the shell MUST add throttling/lockout when
- *     it adds one — an unthrottled password endpoint is a free oracle.
- *   * The UNKNOWN-USER path MUST be constant-time: when a supplied username does
- *     not exist, task 11 must still run the password KDF against a fixed DUMMY
- *     hash (via src/auth/password.ts) and fail, so the response time cannot be
- *     used to enumerate which users exist. Comparing only when the user is found
- *     leaks that difference in timing. NOT implemented here because it belongs to
- *     the login flow, not to session storage.
+ *   * The LOCKOUT and the constant-time unknown-user path are implemented in
+ *     src/auth/login.ts, not here — they belong to the LOGIN flow, not to
+ *     session storage, and this module neither knows nor cares how a session was
+ *     created.
  *   * A PASSWORD CHANGE does NOT invalidate live sessions. `readSession` checks
  *     the session and the user's `active` flag, not the password hash, so
  *     changing a password leaves every already-issued session valid until it

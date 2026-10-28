@@ -25,13 +25,26 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * The NIL uuid — `00000000-0000-0000-0000-000000000000`.
+ *
+ * It is a valid uuid SHAPE and it is not a tenant: it is what a placeholder
+ * (`.env.example`, a scaffold, an unset variable copied by hand) contains. It
+ * must be REJECTED here, because a deployment that boots scoped to it is worse
+ * than one that refuses to boot: the RLS policies pin a tenant that does not
+ * exist, so every query returns zero rows, every sign-in fails as `invalid`,
+ * and the failure looks like a wrong password rather than a misconfiguration.
+ */
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/**
  * The tenant id this deployment serves, from `TENANT_ID`.
  *
  * Returns the trimmed value, or THROWS a clear, actionable error when it is
- * unset or malformed: a deployment that does not know its tenant cannot resolve
- * a login, and failing loudly at boot beats failing quietly on the first request
- * (or, worse, scoping to the wrong tenant). Callers should let the error
- * propagate — it is a misconfiguration, never a user-facing condition.
+ * unset, malformed, or the nil uuid: a deployment that does not know its tenant
+ * cannot resolve a login, and failing loudly at boot beats failing quietly on
+ * the first request (or, worse, scoping to the wrong tenant). Callers should
+ * let the error propagate — it is a misconfiguration, never a user-facing
+ * condition.
  */
 export function configuredTenantId(): string {
   const raw = process.env.TENANT_ID?.trim() ?? '';
@@ -45,6 +58,14 @@ export function configuredTenantId(): string {
   if (!UUID.test(raw)) {
     throw new Error(
       `configuredTenantId: TENANT_ID must be a tenant uuid (got ${JSON.stringify(raw)})`,
+    );
+  }
+  if (raw.toLowerCase() === NIL_UUID) {
+    throw new Error(
+      'configuredTenantId: TENANT_ID is the nil uuid (00000000-0000-0000-0000-000000000000). ' +
+        'That is a placeholder, not a tenant: no row in `tenants` has it, so every query ' +
+        'would return zero rows and every sign-in would fail as "invalid". Set TENANT_ID ' +
+        'to the real tenant uuid.',
     );
   }
   return raw;

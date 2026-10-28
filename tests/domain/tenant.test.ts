@@ -42,4 +42,19 @@ test('configuredTenantId throws a clear error when TENANT_ID is unset or malform
     /must be a tenant uuid/,
     'a malformed TENANT_ID must throw rather than scope to nothing',
   );
+
+  // The NIL uuid has a valid uuid SHAPE and is still not a tenant. It is what a
+  // placeholder (`.env.example`, a scaffold, a half-filled manifest) contains,
+  // and a deployment that boots scoped to it would pin a tenant id that owns no
+  // rows: every query returns nothing and every sign-in fails as "invalid",
+  // which reads as a wrong password instead of a misconfiguration.
+  process.env[KEY] = '00000000-0000-0000-0000-000000000000';
+  assert.throws(
+    () => configuredTenantId(),
+    /nil uuid/,
+    'the nil uuid must be rejected — it is a placeholder, not a tenant',
+  );
+  // ...and it cannot be smuggled past the check by its case or its padding.
+  process.env[KEY] = '  00000000-0000-0000-0000-000000000000  ';
+  assert.throws(() => configuredTenantId(), /nil uuid/);
 });
