@@ -655,9 +655,16 @@ async function movementExists(db: Queryable, key: string): Promise<boolean> {
  *     point (e.g. the document advanced under the form). Refused as
  *     `wrong_state`, so a call that changes nothing CANNOT report `ok`.
  *
- * A forged `from` cannot defeat the double-tap guard either: an invented `from`
- * lands outside these two cases and is refused rather than being allowed to
- * compute a fresh cumulative and post a second movement.
+ * A forged `from` lands outside BOTH cases above and is refused as `stale`
+ * (`wrong_state`) — UNLESS it happens to land exactly on the stored quantity,
+ * which is the `replay` case. That is deliberate and harmless: the ledger only
+ * ever stores the CUMULATIVE quantity a line reached, never the pre-state it
+ * moved from, so a forged `from` whose `from + qty` equals a past stored
+ * cumulative is indistinguishable from a genuine retry and is answered `ok` as a
+ * replay — with NO second movement written and the correct document status
+ * returned. The case is therefore UNOBSERVABLE (it changes nothing), and the
+ * guard that matters — a forged `from` cannot post a second movement — holds
+ * because a `replay` short-circuits before the write.
  */
 async function classifyFlowLine(
   db: Queryable,

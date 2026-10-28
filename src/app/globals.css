@@ -441,3 +441,155 @@ p[role="alert"] {
   padding: 0.75rem;
   margin-block: 0.75rem;
 }
+
+/*
+ * THE STOCK SCREENS (Task 15) — layout only, and NO field styling.
+ *
+ * Same discipline as the screens above: the shared rules paint every control.
+ * These rules are the phone-first column and the ONE hazard Tasks 13 and 14 both
+ * paid for: a catalogue string (an item name, a location name, a SKU) has no
+ * spaces to break on and a flex item's default `min-width: auto` refuses to
+ * shrink below its LONGEST WORD — so without `min-width: 0` and
+ * `overflow-wrap: anywhere` a long name or SKU blows a 390px layout (it did, to
+ * 782px and to 493px). Every catalogue string below carries both.
+ */
+
+.stock-search {
+  margin-block: 1rem;
+}
+
+.stock-search button {
+  width: 100%;
+  margin-block: 0.5rem;
+}
+
+.stock-clear {
+  display: inline-block;
+  margin-block: 0.25rem;
+}
+
+.stock-list,
+.stock-movements {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stock-item {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  margin-block: 0.75rem;
+}
+
+/* The whole card is the tap target on a phone. */
+.stock-link {
+  display: block;
+  padding: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.stock-line-head,
+.stock-line-meta,
+.stock-balance,
+.stock-movement-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.stock-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+/* The machine-read code, left-to-right (`.ltr-value`) and able to break. */
+.stock-sku {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.stock-location {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+}
+
+.stock-qty {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-variant,
+.stock-scope {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-variant {
+  font-weight: 700;
+}
+
+.stock-scope {
+  color: var(--muted);
+}
+
+.stock-section {
+  margin-block: 1.25rem;
+}
+
+.stock-balance {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-block: 0.5rem;
+}
+
+.stock-movement {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-block: 0.75rem;
+}
+
+.stock-movement-detail {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0;
+}
+
+.stock-movement-pair {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.stock-movement-pair dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-width: 3rem;
+}
+
+.stock-movement-pair dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-reason {
+  font-weight: 700;
+}
+
+.stock-truncated {
+  color: var(--muted);
+  font-size: 0.9rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

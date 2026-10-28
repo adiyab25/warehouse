@@ -38,6 +38,31 @@ export const MOVEMENT_REASONS = [
 export type MovementReason = (typeof MOVEMENT_REASONS)[number];
 
 /**
+ * The i18n key for each movement reason — the ONE place a raw enum value becomes
+ * a translated label.
+ *
+ * The reason list is a CLOSED, TRANSLATED CONTRACT: every reason the database
+ * accepts (`MOVEMENT_REASONS`, mirrored by `stock_movements_reason_check`) has
+ * its own Arabic AND English string, and a raw enum value (`issue_to_branch`)
+ * must NEVER reach a screen. Typing the record `Record<MovementReason, string>`
+ * makes TypeScript refuse a MISSING reason at compile time; the domain test
+ * ('every movement reason has an Arabic and English label') refuses one that is
+ * added to the list without a dictionary entry at run time, so adding a reason
+ * in the migration can never silently render its raw value.
+ */
+export const REASON_MESSAGE_KEYS: Record<MovementReason, string> = {
+  receipt: 'stock.reason.receipt',
+  issue_to_branch: 'stock.reason.issue_to_branch',
+  transfer: 'stock.reason.transfer',
+  return_from_branch: 'stock.reason.return_from_branch',
+  consumption: 'stock.reason.consumption',
+  sale: 'stock.reason.sale',
+  count_correction: 'stock.reason.count_correction',
+  write_off: 'stock.reason.write_off',
+  opening_balance: 'stock.reason.opening_balance',
+};
+
+/**
  * A candidate movement handed to {@link validateMovement}.
  *
  * `reason` is typed as a plain `string` (not {@link MovementReason}) on purpose:

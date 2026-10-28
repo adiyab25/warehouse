@@ -211,6 +211,10 @@ test('a key used in the app but missing from the dictionaries is detectable', ()
     'src/app/requisitions/[id]/page.tsx',
     'src/components/RequisitionListScreen.tsx',
     'src/components/RequisitionDetailScreen.tsx',
+    'src/app/stock/page.tsx',
+    'src/app/stock/[variantId]/page.tsx',
+    'src/components/StockListScreen.tsx',
+    'src/components/StockHistoryScreen.tsx',
     'src/proxy.ts',
     'src/i18n/index.ts',
   ];
