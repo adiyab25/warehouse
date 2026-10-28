@@ -54,12 +54,13 @@ create table requisitions (
   -- UPDATE can drive a requisition backwards or reopen a terminal one:
   --   requested -> approved | rejected
   --   approved  -> issued | partially_issued
-  --   partially_issued -> issued | partially_issued
-  --   issued    -> received
+  --   partially_issued -> issued | partially_issued | received
+  --   issued    -> received | partially_issued
   --   received  -> closed | returned
   --   closed, rejected, returned are TERMINAL.
-  -- `partially_issued` is NATIVE: issuing some lines but not others leaves the
-  -- requisition open rather than silently complete.
+  -- `partially_issued` is NATIVE: issuing some lines but not others, or
+  -- confirming only part of what was issued, leaves the requisition open rather
+  -- than silently complete.
   status text not null default 'requested' constraint requisitions_status_check check (
     status in (
       'requested',
@@ -84,6 +85,15 @@ create table requisitions (
   issued_at timestamptz,
   received_at timestamptz,
   closed_at timestamptz,
+  -- Who refused the ask, when, and why. Set by `reject` while still `requested`
+  -- and NULL on every requisition that was approved instead. The reason is free
+  -- text (the `reject` API accepts it optionally).
+  rejected_by uuid,
+  rejected_at timestamptz,
+  rejected_reason text,
+  -- Who closed the requisition (a `received` one). The `closed_at` above is
+  -- when. Set by `close`; NULL until then.
+  closed_by uuid,
   notes text,
   -- Redundant against the primary key alone, but `requisition_lines`' composite
   -- FK needs a unique constraint on exactly these columns to point at — and
@@ -96,7 +106,11 @@ create table requisitions (
   foreign key (tenant_id, requested_by) references app_users (tenant_id, id),
   -- The approver is nullable (NULL until approved); a composite FK with a NULL
   -- column is simply not enforced.
-  foreign key (tenant_id, approved_by) references app_users (tenant_id, id)
+  foreign key (tenant_id, approved_by) references app_users (tenant_id, id),
+  -- Likewise the rejecter and the closer: NULL until that step, and when set
+  -- they must be a user of THIS tenant.
+  foreign key (tenant_id, rejected_by) references app_users (tenant_id, id),
+  foreign key (tenant_id, closed_by) references app_users (tenant_id, id)
 );
 
 alter table requisitions enable row level security;
@@ -216,8 +230,8 @@ begin
   if not (
        (old.status = 'requested'        and new.status in ('approved', 'rejected'))
     or (old.status = 'approved'         and new.status in ('issued', 'partially_issued'))
-    or (old.status = 'partially_issued' and new.status in ('issued', 'partially_issued'))
-    or (old.status = 'issued'           and new.status = 'received')
+    or (old.status = 'partially_issued' and new.status in ('issued', 'partially_issued', 'received'))
+    or (old.status = 'issued'           and new.status in ('received', 'partially_issued'))
     or (old.status = 'received'         and new.status in ('closed', 'returned'))
   ) then
     raise exception

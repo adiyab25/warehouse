@@ -1,6 +1,6 @@
 import { allowedTransitions, canConfirm, type RequisitionStatus } from '../domain/requisition.ts';
 import type { Queryable } from './client.ts';
-import { type Location, transitLocation } from './locations.ts';
+import { transitLocation, warehouseLocation } from './locations.ts';
 import { postMovement } from './movements.ts';
 import type { Requisition, RequisitionLine } from './types.ts';
 
@@ -67,6 +67,19 @@ function requirePositiveQty(value: unknown, field: string, context: string): num
     );
   }
   return value;
+}
+
+/**
+ * Rounds a quantity to the 3 decimals `numeric(12, 3)` stores.
+ *
+ * Quantities are read back from Postgres as JS numbers, and cumulative legs are
+ * summed in JS; without this a decimal chain (0.1 + 0.2) would drift to
+ * 0.30000000000000004 and, worse, a per-leg idempotency key built from it would
+ * never match on retry. Every cumulative quantity and derived remainder passes
+ * through here, so a key is byte-identical between the first post and a retry.
+ */
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 /**
@@ -218,23 +231,24 @@ export async function approve(
  * derives discreteness from the item and validates quantity, reason and
  * locations), never a raw insert.
  *
- * PARTIAL IS NATIVE. `lines` may name a SUBSET of the requisition's lines; a
- * line NOT supplied is left untouched (`issued_qty` stays 0). After issuing, the
- * header is `issued` only when EVERY line has been issued in full
- * (`issued_qty >= requested_qty`, or `approved_qty` when the warehouse set one);
- * otherwise the header stays `partially_issued` and the requisition remains open
- * for the remaining lines. A line that has been issued is marked `fulfilled`.
+ * PARTIAL IS NATIVE, AND A LINE TAKES SEVERAL LEGS. `lines` may name a SUBSET of
+ * the requisition's lines; a line NOT supplied is left untouched. A line that is
+ * already partly issued may be TOPPED UP: each call issues up to its REMAINING
+ * target (`approved_qty` when the warehouse set one, else `requested_qty`), until
+ * `issued_qty` reaches it. A leg is refused only when it would EXCEED the
+ * remaining target (you cannot release more than was agreed) or when the line is
+ * already fulfilled (nothing left to issue) — so 6-of-10 followed by 4-of-10 is
+ * legal and completes the line. After issuing, the header is `issued` only when
+ * EVERY line is issued in full; otherwise it stays `partially_issued` and the
+ * requisition remains open for the remaining lines.
  *
- * A line may be issued ONCE. Re-issuing a line that already carries an
- * `issued_qty` is refused rather than silently deduped: the per-line ledger key
- * (`requisition:<id>:issue:<variantId>`) makes a RETRY land on the same
- * movement, so a second, genuine issue would move no stock while the line's
- * count went up — exactly the invisible mismatch this backbone refuses. A line
- * is issued for at most its remaining target.
- *
- * IDEMPOTENT: each line posts under a STABLE per-line key
- * (`requisition:<id>:issue:<variantId>`), so a retried post lands on the SAME
- * movement.
+ * IDEMPOTENT PER LEG: each leg posts under a STABLE key derived from the
+ * CUMULATIVE issued quantity it produces —
+ * `requisition:<id>:issue:<variantId>:<issuedQtyAfter>`. A retry of the SAME leg
+ * therefore lands on the SAME movement (a leg is a no-op the second time), while
+ * a genuine SECOND leg — one that grows `issued_qty` to a new value — gets a new
+ * key and moves stock. A timestamp would break this: a retry would carry a new
+ * timestamp, miss the conflict and post twice.
  *
  * `qty` values are validated as finite numbers > 0 before anything is written
  * (numeric(12,3) would round a bad one silently, so the validator is the gate).
@@ -260,17 +274,22 @@ export async function issue(
     const qty = requirePositiveQty(line.qty, 'qty', `issue (variant ${line.variantId})`);
     const stored = await readLine(db, id, line.variantId);
     const target = stored.approvedQty ?? stored.requestedQty;
+    const remaining = round3(target - stored.issuedQty);
 
-    if (stored.issuedQty > 0) {
+    if (remaining <= 0) {
       throw new Error(
-        `issue: line for variant ${line.variantId} on requisition ${id} has already been issued (issued_qty ${stored.issuedQty}) — a line is issued once, under a stable ledger key`,
+        `issue: line for variant ${line.variantId} on requisition ${id} is already fulfilled (issued ${stored.issuedQty} of ${target}) — nothing left to issue`,
       );
     }
-    if (qty > target) {
+    if (qty > remaining) {
       throw new Error(
-        `issue: line for variant ${line.variantId} on requisition ${id} — cannot issue ${qty}, only ${target} was ${stored.approvedQty == null ? 'requested' : 'approved'}`,
+        `issue: line for variant ${line.variantId} on requisition ${id} — cannot issue ${qty}, only ${remaining} remains of ${target} ${stored.approvedQty == null ? 'requested' : 'approved'}`,
       );
     }
+
+    // The key is built from the CUMULATIVE issued quantity this leg produces, so
+    // it is deterministic and collision-free across legs (see the docstring).
+    const issuedAfter = round3(stored.issuedQty + qty);
 
     await postMovement(db, {
       variantId: line.variantId,
@@ -280,14 +299,14 @@ export async function issue(
       toLocationId: transit.id,
       refType: 'REQUISITION',
       refId: id,
-      idempotencyKey: issueKey(id, line.variantId),
+      idempotencyKey: issueKey(id, line.variantId, issuedAfter),
     });
 
-    const lineStatus = qty >= target ? 'fulfilled' : 'open';
+    const lineStatus = issuedAfter >= target ? 'fulfilled' : 'open';
     await db.query(
       `update requisition_lines set issued_qty = $3, status = $4
         where tenant_id = ${TENANT} and requisition_id = $1 and variant_id = $2`,
-      [id, line.variantId, qty, lineStatus],
+      [id, line.variantId, issuedAfter, lineStatus],
     );
   }
 
@@ -313,9 +332,9 @@ export async function issue(
 }
 
 /**
- * Confirms receipt of an issued requisition: for each line, writes ONE ledger
- * movement `transit -> branch` through {@link postMovement}, records what arrived
- * (`received_qty`), and advances the header to `received`.
+ * Confirms receipt of an issued (or partly-issued) requisition: for each line,
+ * writes ONE ledger movement `transit -> branch` through {@link postMovement},
+ * records what arrived (`received_qty`), and advances the header.
  *
  * THIS IS WHERE STOCK BECOMES THE BRANCH'S. The issue leg credited transit; this
  * leg debits transit and credits the branch, from the SAME row, so the branch's
@@ -323,16 +342,28 @@ export async function issue(
  * is NOT yet the branch's, and a line that arrives SHORT of what was issued is a
  * visible `short` line, not an invisible disappearance.
  *
- * Only an `issued` requisition can be confirmed ({@link canConfirm}); the state
- * machine allows `issued -> received` and nothing else, and the status trigger
- * refuses the rest. Confirming MORE than a line's `issued_qty` is refused,
- * naming the state — you cannot receive stock that never left the warehouse. A
- * line received in full is `fulfilled`; one received short is `short`.
+ * A PARTLY-ISSUED REQUISITION CAN BE CONFIRMED TOO ({@link canConfirm}): stock
+ * is on the road as soon as ANY line has been released, so the branch must be
+ * able to acknowledge what has actually arrived while the rest is still coming.
+ * Confirming is PER LINE and limited to what is still in transit —
+ * `issued_qty - received_qty`; receiving MORE than that is refused, naming the
+ * numbers, because you cannot receive stock that never left the warehouse.
  *
- * IDEMPOTENT: each line posts under a STABLE per-line key
- * (`requisition:<id>:recv:<variantId>`), so a retry — even one that raced past
- * the state guard — lands on the SAME movement and cannot double the branch's
- * stock. The state guard is the fast path; the key is the backstop.
+ * AFTER A CONFIRM THE HEADER IS `received` ONLY WHEN NOTHING IS OUTSTANDING:
+ * every line is fulfilled (`issued_qty` has reached its target) AND every line's
+ * issued stock has fully arrived (`received_qty = issued_qty`). Otherwise it is
+ * `partially_issued` — more is still to come (a line still to be released, or
+ * released stock still on the road).
+ *
+ * A line received in full is `fulfilled`; one whose arrivals have fallen behind
+ * what was issued is `short`; one whose released stock has all arrived but whose
+ * target is not yet met is `open` (the warehouse has not finished).
+ *
+ * IDEMPOTENT PER LEG: each leg posts under a STABLE key derived from the
+ * CUMULATIVE received quantity it produces —
+ * `requisition:<id>:recv:<variantId>:<receivedQtyAfter>`. A retry of the same leg
+ * lands on the SAME movement (even one that raced past the state guard), while a
+ * genuine second leg gets a new key. A timestamp would defeat this.
  *
  * `qty` values are validated as finite numbers > 0 before anything is written.
  *
@@ -346,7 +377,7 @@ export async function confirmReceipt(
   const requisition = await lockForFlow(db, id, 'confirmReceipt');
   if (!canConfirm(requisition.status as RequisitionStatus)) {
     throw new Error(
-      `confirmReceipt: requisition ${id} cannot be confirmed — its status is '${requisition.status}' (only an 'issued' requisition has stock in transit to confirm)`,
+      `confirmReceipt: requisition ${id} cannot be confirmed — its status is '${requisition.status}' (only an 'issued' or 'partially_issued' requisition has stock in transit to confirm)`,
     );
   }
 
@@ -355,11 +386,22 @@ export async function confirmReceipt(
   for (const line of lines) {
     const qty = requirePositiveQty(line.qty, 'qty', `confirmReceipt (variant ${line.variantId})`);
     const stored = await readLine(db, id, line.variantId);
-    if (qty > stored.issuedQty) {
+    const inTransit = round3(stored.issuedQty - stored.receivedQty);
+
+    if (inTransit <= 0) {
       throw new Error(
-        `confirmReceipt: line for variant ${line.variantId} on requisition ${id} — cannot receive ${qty}, only ${stored.issuedQty} was issued (the line's state is 'issued')`,
+        `confirmReceipt: line for variant ${line.variantId} on requisition ${id} has nothing left in transit — it was issued ${stored.issuedQty} and ${stored.receivedQty} has already been received, so ${qty} cannot be confirmed`,
       );
     }
+    if (qty > inTransit) {
+      throw new Error(
+        `confirmReceipt: line for variant ${line.variantId} on requisition ${id} — cannot receive ${qty}; only ${inTransit} is still in transit (issued ${stored.issuedQty}, already received ${stored.receivedQty}), so you cannot receive stock that never left the warehouse`,
+      );
+    }
+
+    // The key is built from the CUMULATIVE received quantity this leg produces,
+    // so it is deterministic and collision-free across legs.
+    const receivedAfter = round3(stored.receivedQty + qty);
 
     await postMovement(db, {
       variantId: line.variantId,
@@ -369,35 +411,143 @@ export async function confirmReceipt(
       toLocationId: requisition.branch_location_id,
       refType: 'REQUISITION',
       refId: id,
-      idempotencyKey: receiveKey(id, line.variantId),
+      idempotencyKey: receiveKey(id, line.variantId, receivedAfter),
     });
 
     const target = stored.approvedQty ?? stored.requestedQty;
-    const lineStatus = qty >= target ? 'fulfilled' : 'short';
+    const lineStatus =
+      receivedAfter >= target ? 'fulfilled' : receivedAfter >= stored.issuedQty ? 'open' : 'short';
     await db.query(
       `update requisition_lines set received_qty = $3, status = $4
         where tenant_id = ${TENANT} and requisition_id = $1 and variant_id = $2`,
-      [id, line.variantId, qty, lineStatus],
+      [id, line.variantId, receivedAfter, lineStatus],
     );
   }
 
-  await db.query(
-    `update requisitions set status = 'received', received_at = now()
-      where id = $1 and tenant_id = ${TENANT}`,
+  // The header is `received` only when NOTHING is outstanding: every line is
+  // fulfilled AND every line's issued stock has fully arrived. Otherwise more is
+  // still to come, so it is `partially_issued`.
+  const { rows } = await db.query<{ n: number }>(
+    `select count(*)::int as n from requisition_lines
+      where tenant_id = ${TENANT}
+        and requisition_id = $1
+        and (issued_qty < coalesce(approved_qty, requested_qty) or received_qty < issued_qty)`,
     [id],
   );
+  const status: RequisitionStatus = rows[0]!.n === 0 ? 'received' : 'partially_issued';
 
-  return { status: 'received' };
+  await db.query(
+    `update requisitions
+        set status = $2,
+            received_at = case when $2 = 'received' then coalesce(received_at, now()) else received_at end
+      where id = $1 and tenant_id = ${TENANT}`,
+    [id, status],
+  );
+
+  return { status };
 }
 
-/** The stable per-line idempotency key the ISSUE leg posts its movement under. */
-function issueKey(requisitionId: string, variantId: string): string {
-  return `requisition:${requisitionId}:issue:${variantId}`;
+/**
+ * Rejects a requisition: records who refused it, when, and why, and moves the
+ * header `requested -> rejected`.
+ *
+ * Only a `requested` requisition can be rejected — the state machine allows
+ * `requested -> rejected` and no other move INTO `rejected`, and the status
+ * trigger refuses anything else. An already-`approved` requisition was ACCEPTED;
+ * refusing it now would be a different act (a returned/correcting document, not
+ * a rejection), so this refuses and names the current state. `rejected` is
+ * TERMINAL: once rejected, the requisition never moves again.
+ *
+ * `actorUserId` is REQUIRED — a user id — so `rejected_by` can never stay NULL;
+ * it is written with `rejected_at` (and `rejected_reason`, when a `reason` is
+ * given) on the call.
+ *
+ * Call it with the scoped `db` from inside `withTenant`; never nest `withTenant`.
+ */
+export async function reject(
+  db: Queryable,
+  id: string,
+  actorUserId: string,
+  reason?: string,
+): Promise<Requisition> {
+  if (typeof actorUserId !== 'string' || actorUserId.trim() === '') {
+    throw new Error(
+      `reject: actorUserId must be a non-empty user id (got ${JSON.stringify(actorUserId)})`,
+    );
+  }
+
+  const requisition = await lockForFlow(db, id, 'reject');
+  if (!allowedTransitions(requisition.status as RequisitionStatus).includes('rejected')) {
+    throw new Error(
+      `reject: requisition ${id} cannot be rejected — its status is '${requisition.status}' (only a 'requested' requisition can be rejected)`,
+    );
+  }
+
+  const { rows } = await db.query<Requisition>(
+    `update requisitions
+        set status = 'rejected', rejected_by = $2, rejected_at = now(), rejected_reason = $3
+      where id = $1 and tenant_id = ${TENANT}
+      returning *`,
+    [id, actorUserId, reason ?? null],
+  );
+  const rejected = rows[0];
+  if (!rejected) throw new Error(`reject: requisition ${id} disappeared while being rejected`);
+  return rejected;
 }
 
-/** The stable per-line idempotency key the CONFIRM leg posts its movement under. */
-function receiveKey(requisitionId: string, variantId: string): string {
-  return `requisition:${requisitionId}:recv:${variantId}`;
+/**
+ * Closes a received requisition: moves the header `received -> closed` and
+ * stamps `closed_at` (and, since it takes an actor, `closed_by`).
+ *
+ * Only a `received` requisition can be closed — the state machine allows
+ * `received -> closed` and nothing else INTO `closed`, and the status trigger
+ * refuses the rest. Closing is the END of the document: `closed` is TERMINAL, so
+ * a closed requisition never moves again. (Goods going BACK to the warehouse are
+ * a different ending — `returned` — which Task 8 owns.)
+ *
+ * `actorUserId` is REQUIRED — a user id — so `closed_by` can never stay NULL; it
+ * is written with `closed_at` on the call.
+ *
+ * Call it with the scoped `db` from inside `withTenant`; never nest `withTenant`.
+ */
+export async function close(
+  db: Queryable,
+  id: string,
+  actorUserId: string,
+): Promise<Requisition> {
+  if (typeof actorUserId !== 'string' || actorUserId.trim() === '') {
+    throw new Error(
+      `close: actorUserId must be a non-empty user id (got ${JSON.stringify(actorUserId)})`,
+    );
+  }
+
+  const requisition = await lockForFlow(db, id, 'close');
+  if (!allowedTransitions(requisition.status as RequisitionStatus).includes('closed')) {
+    throw new Error(
+      `close: requisition ${id} cannot be closed — its status is '${requisition.status}' (only a 'received' requisition can be closed)`,
+    );
+  }
+
+  const { rows } = await db.query<Requisition>(
+    `update requisitions
+        set status = 'closed', closed_by = $2, closed_at = now()
+      where id = $1 and tenant_id = ${TENANT}
+      returning *`,
+    [id, actorUserId],
+  );
+  const closed = rows[0];
+  if (!closed) throw new Error(`close: requisition ${id} disappeared while being closed`);
+  return closed;
+}
+
+/** The stable per-leg idempotency key the ISSUE leg posts its movement under. */
+function issueKey(requisitionId: string, variantId: string, issuedQtyAfter: number): string {
+  return `requisition:${requisitionId}:issue:${variantId}:${issuedQtyAfter}`;
+}
+
+/** The stable per-leg idempotency key the CONFIRM leg posts its movement under. */
+function receiveKey(requisitionId: string, variantId: string, receivedQtyAfter: number): string {
+  return `requisition:${requisitionId}:recv:${variantId}:${receivedQtyAfter}`;
 }
 
 /**
@@ -426,13 +576,14 @@ async function readLine(
   db: Queryable,
   requisitionId: string,
   variantId: string,
-): Promise<{ requestedQty: number; approvedQty: number | null; issuedQty: number }> {
+): Promise<{ requestedQty: number; approvedQty: number | null; issuedQty: number; receivedQty: number }> {
   const { rows } = await db.query<{
     requested_qty: string;
     approved_qty: string | null;
     issued_qty: string;
+    received_qty: string;
   }>(
-    `select requested_qty, approved_qty, issued_qty
+    `select requested_qty, approved_qty, issued_qty, received_qty
        from requisition_lines
       where tenant_id = ${TENANT} and requisition_id = $1 and variant_id = $2`,
     [requisitionId, variantId],
@@ -447,31 +598,6 @@ async function readLine(
     requestedQty: Number(row.requested_qty),
     approvedQty: row.approved_qty == null ? null : Number(row.approved_qty),
     issuedQty: Number(row.issued_qty),
+    receivedQty: Number(row.received_qty),
   };
-}
-
-/**
- * Returns the tenant's warehouse location — where issued stock leaves FROM.
- *
- * A requisition names the BRANCH it is for, not the warehouse it draws from
- * (there is one warehouse feeding every branch), so the source is resolved on
- * issue. The single active `warehouse` location is the source; if there is none
- * the flow cannot start and this throws rather than posting a movement from
- * nowhere. Call it with the scoped `db` from inside `withTenant`.
- */
-async function warehouseLocation(db: Queryable): Promise<Location> {
-  const { rows } = await db.query<Location>(
-    `select *
-       from locations
-      where tenant_id = ${TENANT} and type = 'warehouse' and active
-      order by code
-      limit 1`,
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new Error(
-      'issue: no active warehouse location for this tenant to issue from',
-    );
-  }
-  return row;
 }

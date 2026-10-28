@@ -210,6 +210,10 @@ export interface Requisition {
   issued_at: Date | null;
   received_at: Date | null;
   closed_at: Date | null;
+  rejected_by: string | null;
+  rejected_at: Date | null;
+  rejected_reason: string | null;
+  closed_by: string | null;
   notes: string | null;
 }
 
@@ -225,6 +229,10 @@ export interface RequisitionInsert {
   issued_at?: Date | null;
   received_at?: Date | null;
   closed_at?: Date | null;
+  rejected_by?: string | null;
+  rejected_at?: Date | null;
+  rejected_reason?: string | null;
+  closed_by?: string | null;
   notes?: string | null;
 }
 
@@ -340,7 +348,9 @@ export const foreignKeys = [
   { table: 'requisition_lines', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },
   { table: 'requisitions', columns: 'tenant_id,approved_by', definition: "FOREIGN KEY (tenant_id, approved_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'requisitions', columns: 'tenant_id,branch_location_id', definition: "FOREIGN KEY (tenant_id, branch_location_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'requisitions', columns: 'tenant_id,closed_by', definition: "FOREIGN KEY (tenant_id, closed_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'requisitions', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
+  { table: 'requisitions', columns: 'tenant_id,rejected_by', definition: "FOREIGN KEY (tenant_id, rejected_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'requisitions', columns: 'tenant_id,requested_by', definition: "FOREIGN KEY (tenant_id, requested_by) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id,actor_user_id', definition: "FOREIGN KEY (tenant_id, actor_user_id) REFERENCES app_users(tenant_id, id)" },
   { table: 'stock_movements', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },

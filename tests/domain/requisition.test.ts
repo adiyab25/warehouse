@@ -28,13 +28,13 @@ test('allowed transitions are exactly the state machine', () => {
   );
   assert.deepEqual(
     allowedTransitions('partially_issued'),
-    ['issued', 'partially_issued'],
-    'a partly-issued requisition may be issued again, or completed',
+    ['issued', 'partially_issued', 'received'],
+    'a partly-issued requisition may be issued again, completed, or finished by receipt',
   );
   assert.deepEqual(
     allowedTransitions('issued'),
-    ['received'],
-    'the only way out of `issued` is to confirm receipt',
+    ['received', 'partially_issued'],
+    'a fully-issued requisition completes to `received`, or falls back to `partially_issued` when a confirm leaves stock on the road',
   );
   assert.deepEqual(
     allowedTransitions('received'),
@@ -49,8 +49,12 @@ test('allowed transitions are exactly the state machine', () => {
 test('a requisition cannot be confirmed while still requested', () => {
   assert.equal(canConfirm('requested'), false, 'nothing has been issued yet — there is nothing to confirm');
   assert.equal(canConfirm('approved'), false, 'approved stock has not left the warehouse');
-  assert.equal(canConfirm('partially_issued'), false, 'a partial issue is still in progress');
-  assert.equal(canConfirm('issued'), true, 'only an issued requisition has stock in transit to confirm');
+  assert.equal(
+    canConfirm('partially_issued'),
+    true,
+    'a partial issue has stock in transit — the branch must be able to confirm what has arrived',
+  );
+  assert.equal(canConfirm('issued'), true, 'an issued requisition has stock in transit to confirm');
   assert.equal(canConfirm('received'), false, 'an already-received requisition cannot be confirmed again');
   assert.equal(canConfirm('closed'), false, 'a closed requisition is terminal');
   assert.equal(canConfirm('rejected'), false, 'a rejected requisition is terminal');

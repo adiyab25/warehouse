@@ -102,3 +102,35 @@ export async function transitLocation(db: Queryable): Promise<Location> {
   }
   return row;
 }
+
+/**
+ * Returns the tenant's warehouse location — the ONE source stock is issued FROM.
+ *
+ * A requisition names the BRANCH it is for, not the warehouse it draws from
+ * (there is one warehouse feeding every branch), so the source is resolved when
+ * stock is issued. The single active `warehouse` location is the source; if
+ * there is none the flow cannot start and this throws rather than posting a
+ * movement from nowhere. Call it with the scoped `db` from inside `withTenant`.
+ *
+ * Exported as a SIBLING of {@link transitLocation}: every flow that moves stock
+ * out of the warehouse (requisitions today, receipts/returns and counts later)
+ * needs it, and a second private copy would drift.
+ */
+export async function warehouseLocation(db: Queryable): Promise<Location> {
+  const { rows } = await db.query<Location>(
+    `select *
+       from locations
+      where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        and type = 'warehouse'
+        and active
+      order by code
+      limit 1`,
+  );
+  const row = rows[0];
+  if (!row) {
+    throw new Error(
+      'warehouseLocation: no active warehouse location for this tenant to issue from',
+    );
+  }
+  return row;
+}
