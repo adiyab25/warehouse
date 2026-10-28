@@ -90,6 +90,79 @@ npm run ci           # the gate for every task: tsc --noEmit + eslint . + the fu
 Migrating twice is a no-op: each migration runs in its own transaction and is
 recorded by filename in `public.schema_migrations`.
 
+## Seed and end-to-end gate
+
+A ready-to-use demo tenant and a proof that the whole system hangs together.
+
+```bash
+npm run db:reset       # apply every migration cleanly (owner role)
+npm run seed           # one tenant: warehouse, 14 branches, pseudo locations,
+                       # users, items of each family with real opening balances
+npm run e2e            # receive -> request -> issue -> confirm -> return -> count,
+                       # asserted step by step, then an HTTP smoke on a next build
+npm run ci             # tsc + eslint + the full test suite (the task gate)
+```
+
+### Seed a demo tenant
+
+`npm run seed` creates a tenant with **one warehouse (`WH-01`), 14 branches
+(`BR-01`…`BR-14`), the transit / scrap / quarantine locations, a vendor, the
+users `owner`, `manager` and `branch01`…`branch14`, and a few items of each
+family** (sellable, consumable, asset) with opening balances posted through the
+real importer — so every balance is a ledger row with an actor. Re-running it
+reports "already seeded" and changes nothing. It **prints the tenant id** — copy
+it into `TENANT_ID` in `.env` so the app knows which tenant to serve.
+
+Passwords come from the environment, all three **at least 12 characters**, and
+are never printed or stored in the repo (there is no default):
+
+```powershell
+# PowerShell
+$env:SEED_OWNER_PASSWORD="<a 12+ char owner password>"
+$env:SEED_MANAGER_PASSWORD="<a 12+ char manager password>"
+$env:SEED_BRANCH_PASSWORD="<a 12+ char branch password>"
+npm run seed -- --name "Demo Kindergarten"
+```
+```cmd
+REM cmd
+set "SEED_OWNER_PASSWORD=<a 12+ char owner password>"
+set "SEED_MANAGER_PASSWORD=<a 12+ char manager password>"
+set "SEED_BRANCH_PASSWORD=<a 12+ char branch password>"
+npm run seed -- --name "Demo Kindergarten"
+```
+
+### Open an opening-balance file
+
+```bash
+npm run import:opening -- --tenant <tenant-id> --user owner --file "path\to\file.csv" [--apply]
+```
+
+Dry-run by default (prints what it would change and saves nothing); add
+`--apply` to commit. Columns, rules and every error are in
+`docs/import-format.md`.
+
+### The end-to-end gate
+
+`npm run e2e` seeds a **fresh** tenant and drives the full life of a delivery
+through the real writers as the matching roles — receive 40 against an expected
+40, request 10 at `BR-04`, approve + issue, confirm, return 2, count with a −1
+variance — asserting on-hand per location after every step, then reconciles the
+`on_hand` view against an independent ledger sum for every variant. It then runs
+an HTTP smoke against a `next build`: sign in, open every screen, render a label,
+and call the read API and the movement write API (idempotency, and the refusals
+for a sale from transit and a sale over on-hand). `npm run e2e -- --no-http`
+skips the build + server half for speed.
+
+### Run the app
+
+```bash
+npx next build
+npx next start     # serves as APP_DATABASE_URL (the non-owner role); refuses a superuser
+```
+
+Open `http://localhost:3000`, sign in as `manager` (or `owner`) with the
+password you set when seeding.
+
 ## Which tenant this deployment serves
 
 **v1 is one deployment per client**, so the tenant is deployment *configuration*,

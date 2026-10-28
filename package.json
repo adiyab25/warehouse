@@ -14,7 +14,9 @@
     "db:types": "node scripts/gen-types.mjs",
     "test": "node --import tsx --test tests/**/*.test.ts",
     "ci": "node scripts/ci.mjs",
-    "import:opening": "node --import tsx scripts/import-opening.mjs"
+    "import:opening": "node --import tsx scripts/import-opening.mjs",
+    "seed": "node --import tsx scripts/seed.mjs",
+    "e2e": "node --import tsx scripts/e2e-flow.mjs"
   },
   "keywords": [],
   "author": "",
