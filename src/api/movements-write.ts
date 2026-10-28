@@ -1,3 +1,12 @@
+/*
+ * OWNER DECISION PENDING (recorded in the plan; each needs a data-model change, none is built here):
+ *   1. Per-client allowed locations and per-client caps — today any write token may debit any
+ *      warehouse/branch of its tenant, up to the stock held there.
+ *   2. Storing the actor's NAME at post time — today the name is joined from api_clients when the
+ *      event is built, so a renamed/deleted client rewrites history.
+ *   3. The warehouse can still go negative through the UI requisition issue (18b/requisition screens
+ *      do not take the guarded debit); the API's own debits are guarded.
+ */
 import { itemLevelAt } from '../db/replenishment.ts';
 import { lockStockPair, postMovement } from '../db/movements.ts';
 import type { Queryable } from '../db/client.ts';
@@ -18,6 +27,26 @@ import type { WriteContext, WriteResult } from './write.ts';
  * decision, not a convenience.
  */
 export const API_ALLOWED_REASONS = ['sale', 'consumption', 'return_from_branch'] as const;
+
+/**
+ * DIRECTION AND LOCATION-TYPE RULES — the one table that says what each API reason may do.
+ *   from / to: the location TYPES allowed on that side, or null = the side must be absent.
+ * A side that is non-null is REQUIRED. A debit side (`from`) is always guarded (cannot take more
+ * than is on hand, under the variant-pair advisory lock), so an integration can neither MINT stock
+ * (a return needs a branch that holds it) nor DRAIN stock that is not sellable (transit, vendor,
+ * scrap, quarantine, holder, bin).
+ */
+export const DIRECTION_RULES = {
+  sale: { from: ['warehouse', 'branch'], to: null },
+  consumption: { from: ['warehouse', 'branch'], to: null },
+  return_from_branch: { from: ['branch'], to: ['warehouse', 'quarantine'] },
+} as const satisfies Record<
+  (typeof API_ALLOWED_REASONS)[number],
+  { from: readonly string[] | null; to: readonly string[] | null }
+>;
+
+/** numeric(12,3) holds at most this; no movement may take a (variant, location) balance past it. */
+export const MAX_BALANCE = '999999999.999';
 
 /** The only keys a body may carry. Anything else (a typo, `actor`) is a 400. */
 const ALLOWED_KEYS = [
@@ -129,13 +158,11 @@ export function parseMovementBody(body: Record<string, unknown>, now: number = D
 
   const from = side(body, 'fromLocationId', 'fromLocationCode');
   const to = side(body, 'toLocationId', 'toLocationCode');
-  // What each allowed reason means for direction — so `sale` can never ADD stock.
-  if (reason === 'sale' || reason === 'consumption') {
-    if (!from) throw invalidField('fromLocationId', `${reason} needs the location it leaves`);
-    if (to) throw invalidField(to.field, `${reason} cannot name a destination`);
-  } else if (!to) {
-    throw invalidField('toLocationId', `${reason} needs the location it arrives at`);
-  }
+  // Direction: every side the reason's rule names is REQUIRED, every side it does not is refused.
+  const rule = DIRECTION_RULES[reason as ParsedMovement['reason']];
+  if (rule.from && !from) throw invalidField('fromLocationId', `${reason} needs the location it leaves (a ${rule.from.join(' or ')})`);
+  if (rule.to && !to) throw invalidField('toLocationId', `${reason} needs the location it arrives at (a ${rule.to.join(' or ')})`);
+  if (!rule.to && to) throw invalidField(to.field, `${reason} cannot name a destination`);
 
   let occurredAt: string | null = null;
   const oa = optString(body, 'occurredAt', 40);
@@ -175,7 +202,7 @@ export function parseMovementBody(body: Record<string, unknown>, now: number = D
   };
 }
 
-type Loc = { id: string; code: string };
+type Loc = { id: string; code: string; type: string };
 
 async function resolveLocation(
   db: Queryable,
@@ -183,7 +210,7 @@ async function resolveLocation(
 ): Promise<Loc | null> {
   if (!s) return null;
   const { rows } = await db.query<Loc>(
-    `select id, code from locations
+    `select id, code, type from locations
       where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
         and active
         and ($1::uuid is null or id = $1)
@@ -237,6 +264,19 @@ export async function executeMovement(
   const from = await resolveLocation(db, p.from);
   const to = await resolveLocation(db, p.to);
 
+  // 3a. Never the same place on both sides (checked on the RESOLVED ids, so id/code mixes count).
+  if (from && to && from.id === to.id) {
+    throw invalidField(p.to?.field ?? 'toLocationId', 'from and to must be different locations');
+  }
+  // 3b. Location TYPES per the direction table.
+  const rule = DIRECTION_RULES[p.reason];
+  if (from && rule.from && !(rule.from as readonly string[]).includes(from.type)) {
+    throw invalidField(p.from?.field ?? 'fromLocationId', `${p.reason} can only leave a ${rule.from.join(' or ')} location; ${from.code} is a ${from.type}`);
+  }
+  if (to && rule.to && !(rule.to as readonly string[]).includes(to.type)) {
+    throw invalidField(p.to?.field ?? 'toLocationId', `${p.reason} can only arrive at a ${rule.to.join(' or ')} location; ${to.code} is a ${to.type}`);
+  }
+
   // 3. The SAME rules the screens use. Number() is exact here: the string was
   // already proven to be <= 12 significant digits with <= 3 decimals.
   const check = validateMovement({
@@ -284,11 +324,15 @@ export async function executeMovement(
   // level) so concurrent writers cannot deadlock. A read is not a lock: the
   // advisory lock is what makes check+insert atomic per (variant, location).
   let before: Awaited<ReturnType<typeof itemLevelAt>> = null;
+  const pairs: Array<[string, string]> = [];
+  if (from) pairs.push([variant.variantId, from.id], [variant.itemId, from.id]); // item level = the stock.low edge
+  if (to) pairs.push([variant.variantId, to.id]); // the credit side is capped under its own lock
+  pairs.sort((x, y) => `${x[0]}:${x[1]}`.localeCompare(`${y[0]}:${y[1]}`)); // one global order: no deadlock
+  for (const [id, loc] of pairs) await lockStockPair(db, id, loc);
   if (from) {
-    await lockStockPair(db, variant.variantId, from.id);
-    await lockStockPair(db, variant.itemId, from.id); // the item-level edge for stock.low
+    // Sum in UNCONSTRAINED numeric: casting a sum to numeric(12,3) is what used to overflow into a 500.
     const { rows: g } = await db.query<{ onHand: string; enough: boolean }>(
-      `select coalesce(sum(qty), 0)::numeric(12,3)::text as "onHand",
+      `select round(coalesce(sum(qty), 0), 3)::text as "onHand",
               coalesce(sum(qty), 0) >= $3::numeric as "enough"
          from on_hand where variant_id = $1 and location_id = $2`,
       [variant.variantId, from.id, p.qty],
@@ -303,6 +347,23 @@ export async function executeMovement(
       );
     }
     before = await itemLevelAt(db, variant.itemId, from.id);
+  }
+  if (to) {
+    const { rows: c } = await db.query<{ over: boolean; onHand: string }>(
+      `select coalesce(sum(qty), 0) + $3::numeric > $4::numeric as "over",
+              round(coalesce(sum(qty), 0), 3)::text as "onHand"
+         from on_hand where variant_id = $1 and location_id = $2`,
+      [variant.variantId, to.id, p.qty, MAX_BALANCE],
+    );
+    if (c[0]?.over) {
+      throw new ApiError(
+        409,
+        'quantity_limit',
+        `${to.code} holds ${c[0].onHand}; adding ${p.qty} would exceed the ledger limit of ${MAX_BALANCE}`,
+        {},
+        { details: { variantId: variant.variantId, location: to.code, onHand: c[0].onHand, requested: p.qty, limit: MAX_BALANCE } },
+      );
+    }
   }
 
   // 6. The ledger row. The actor is the authenticated client, never the caller's say.

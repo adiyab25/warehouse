@@ -125,7 +125,7 @@ export async function itemLevelAt(
   locationId: string,
 ): Promise<{ onHand: string; minQty: string; atOrBelow: boolean } | null> {
   const { rows } = await db.query<{ onHand: string; minQty: string; atOrBelow: boolean }>(
-    `select coalesce(oh.qty, 0)::numeric(12,3)::text as "onHand",
+    `select round(coalesce(oh.qty, 0), 3)::text as "onHand",
             ll.min_qty::numeric(12,3)::text as "minQty",
             coalesce(oh.qty, 0) <= ll.min_qty as "atOrBelow"
        from location_levels ll

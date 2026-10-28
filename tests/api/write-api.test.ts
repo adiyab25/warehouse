@@ -313,7 +313,7 @@ test('every closed-list reason outside the allowlist is 403 reason_not_allowed; 
     assert.equal(res.status, 400, String(reason));
   }
   assert.equal((await post(A.writeTok, sale(A, { reason: 'consumption' }))).status, 201);
-  assert.equal((await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason: 'return_from_branch', toLocationCode: A.whCode.toLowerCase() })).status, 201);
+  assert.equal((await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason: 'return_from_branch', fromLocationId: (await stockedLoc(A, 'branch', A.d.variant, 5)).id, toLocationCode: A.whCode.toLowerCase() })).status, 201);
   // a sale can never ADD stock, a return must name where it arrives
   assert.equal((await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason: 'sale', toLocationId: A.wh })).status, 422);
   assert.equal((await post(A.writeTok, sale(A, { toLocationId: A.br }))).status, 422);
@@ -424,7 +424,7 @@ test('unknown / inactive variants and locations are 422 invalid_field naming the
     [{ sku: 'NOPE-123', qty: '1', reason: 'sale', fromLocationId: A.wh }, 'sku'],
     [sale(A, { fromLocationId: '99999999-9999-4999-8999-999999999999' }), 'fromLocationId'],
     [sale(A, { fromLocationId: undefined, fromLocationCode: 'NOPE' }), 'fromLocationCode'],
-    [{ variantId: A.d.variant, qty: '1', reason: 'return_from_branch', toLocationCode: 'NOPE' }, 'toLocationCode'],
+    [{ variantId: A.d.variant, qty: '1', reason: 'return_from_branch', fromLocationId: A.br, toLocationCode: 'NOPE' }, 'toLocationCode'],
   ];
   for (const [b, field] of cases) {
     const res = await post(A.writeTok, b);
@@ -453,8 +453,10 @@ test('unknown / inactive variants and locations are 422 invalid_field naming the
     await o.query(`update item_variants set active=true where id=$1`, [A.m.variant]);
     await o.query(`update locations set active=false where id=$1`, [A.br]);
   });
-  const inactiveLoc = await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason: 'return_from_branch', toLocationId: A.br });
-  assert.equal(inactiveLoc.status, 422);
+  const inactiveFrom = await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason: 'return_from_branch', fromLocationId: A.br, toLocationId: A.wh });
+  assert.equal(inactiveFrom.status, 422);
+  assert.equal((await j(inactiveFrom)).error.field, 'fromLocationId');
+  assert.equal((await post(A.writeTok, sale(A, { fromLocationId: A.br }))).status, 422);
   await ownerDo((o) => o.query(`update locations set active=true where id=$1`, [A.br]));
 });
 
@@ -532,7 +534,7 @@ test('stock.low is EDGE-triggered: one event on the crossing, none while it stay
   assert.deepEqual([p.itemId, p.location, p.onHand, p.minQty], [item, A.whCode, '5.000', '5.000']);
   assert.equal(p.locationId, A.wh);
   // restock above the minimum, then cross again => a second event
-  assert.equal((await post(A.writeTok, { variantId: variant, qty: '20', reason: 'return_from_branch', toLocationId: A.wh })).status, 201);
+  assert.equal((await post(A.writeTok, { variantId: variant, qty: '20', reason: 'return_from_branch', fromLocationId: (await stockedLoc(A, 'branch', variant, 30)).id, toLocationId: A.wh })).status, 201);
   assert.equal((await lows()).length, 1, 'a credit never emits');
   await sell('16'); // 22 -> 6, above
   assert.equal((await lows()).length, 1);
@@ -612,4 +614,305 @@ test('events tables: tenant isolation as `authenticated`, append-only outbox, ht
   // the trigger (not just the grant) holds even for the owner
   await assert.rejects(ownerDo((o) => o.query(`update domain_events set payload = '{}' where tenant_id = $1`, [A.tenant])), /append-only/);
   await assert.rejects(ownerDo((o) => o.query(`delete from domain_events where tenant_id = $1`, [A.tenant])), /append-only/);
+});
+
+// ───────────────────────── review round 1: fixes pinned (written RED first) ─────────────────────────
+
+type LocType = 'warehouse' | 'bin' | 'branch' | 'transit' | 'vendor' | 'scrap' | 'quarantine' | 'holder';
+let locN = 0;
+async function stockedLoc(w: World, type: LocType, variant: string, qty: number): Promise<{ id: string; code: string }> {
+  return withTenant(await getAppPool(), w.tenant, async (db) => {
+    const l = await createLocation(db, { code: `X${type.slice(0, 3).toUpperCase()}${++locN}-${process.pid % 1000}`, nameAr: `موقع ${type} ${locN}`, type } as any);
+    if (qty > 0) await postMovement(db, { variantId: variant, qty, reason: 'opening_balance', toLocationId: l.id, actorUserId: w.user });
+    return { id: l.id, code: l.code };
+  });
+}
+const ret = (w: World, over: Record<string, unknown> = {}) => ({ variantId: w.d.variant, qty: '1', reason: 'return_from_branch', ...over });
+const totalOnHand = async (w: World, variant: string) =>
+  withTenant(await getAppPool(), w.tenant, async (db) => String((await db.query(`select coalesce(sum(qty),0)::text q from on_hand where variant_id=$1`, [variant])).rows[0].q));
+const freshVariant = async (w: World, sku: string) =>
+  withTenant(await getAppPool(), w.tenant, async (db) => {
+    const it = await createItem(db, { nameAr: `صنف ${sku}`, family: 'sellable', sku, barcode: `B-${sku}`, costEgp: 1 });
+    return { variant: it.variant.id, item: it.item.id };
+  });
+
+test('A: sale/consumption from transit, vendor, scrap, quarantine, holder, bin is 422 fromLocationId naming the allowed types; warehouse and branch work', { skip }, async () => {
+  for (const reason of ['sale', 'consumption']) {
+    for (const type of ['transit', 'vendor', 'scrap', 'quarantine', 'holder', 'bin'] as const) {
+      const l = await stockedLoc(A, type, A.d.variant, 10);
+      const n0 = await movementCount(A.tenant);
+      const res = await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason, fromLocationId: l.id });
+      assert.equal(res.status, 422, `${reason} from ${type}`);
+      const e = (await j(res)).error;
+      assert.equal(e.code, 'invalid_field');
+      assert.equal(e.field, 'fromLocationId');
+      assert.match(e.message, /warehouse/);
+      assert.match(e.message, /branch/);
+      assert.equal(await movementCount(A.tenant), n0);
+      assert.equal(await onHandQty(A.tenant, A.d.variant, l.id), '10.000');
+    }
+    const br = await stockedLoc(A, 'branch', A.d.variant, 10);
+    assert.equal((await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason, fromLocationId: A.wh })).status, 201, `${reason} wh`);
+    assert.equal((await post(A.writeTok, { variantId: A.d.variant, qty: '1', reason, fromLocationCode: br.code })).status, 201, `${reason} branch`);
+  }
+});
+
+test('A: a return with NO source is refused and no stock appears', { skip }, async () => {
+  const before = await totalOnHand(A, A.d.variant);
+  const n0 = await movementCount(A.tenant);
+  const res = await post(A.writeTok, ret(A, { qty: '1000', toLocationId: A.wh }));
+  assert.equal(res.status, 422);
+  const e = (await j(res)).error;
+  assert.equal(e.code, 'invalid_field');
+  assert.equal(e.field, 'fromLocationId');
+  assert.equal(await totalOnHand(A, A.d.variant), before);
+  assert.equal(await movementCount(A.tenant), n0);
+});
+
+test('A: a return must leave a BRANCH; from wh/bin/transit/vendor/scrap/quarantine/holder is 422 fromLocationId', { skip }, async () => {
+  const to = await stockedLoc(A, 'quarantine', A.d.variant, 0);
+  for (const type of ['warehouse', 'bin', 'transit', 'vendor', 'scrap', 'quarantine', 'holder'] as const) {
+    const l = await stockedLoc(A, type, A.d.variant, 10);
+    const res = await post(A.writeTok, ret(A, { fromLocationId: l.id, toLocationId: to.id }));
+    assert.equal(res.status, 422, type);
+    const e = (await j(res)).error;
+    assert.equal(e.field, 'fromLocationId', type);
+    assert.match(e.message, /branch/);
+    assert.equal(await onHandQty(A.tenant, A.d.variant, l.id), '10.000');
+  }
+});
+
+test('A: a return goes only INTO warehouse or quarantine; vendor/scrap/transit/holder/bin/branch are 422 toLocationId', { skip }, async () => {
+  const from = await stockedLoc(A, 'branch', A.d.variant, 50);
+  for (const type of ['vendor', 'scrap', 'transit', 'holder', 'bin', 'branch'] as const) {
+    const l = await stockedLoc(A, type, A.d.variant, 0);
+    const res = await post(A.writeTok, ret(A, { fromLocationId: from.id, toLocationId: l.id }));
+    assert.equal(res.status, 422, type);
+    const e = (await j(res)).error;
+    assert.equal(e.field, 'toLocationId', type);
+    assert.match(e.message, /warehouse/);
+    assert.match(e.message, /quarantine/);
+    assert.equal(await onHandQty(A.tenant, A.d.variant, l.id), '0');
+  }
+  assert.equal(await onHandQty(A.tenant, A.d.variant, from.id), '50.000');
+  const q = await stockedLoc(A, 'quarantine', A.d.variant, 0);
+  assert.equal((await post(A.writeTok, ret(A, { fromLocationId: from.id, toLocationId: A.wh }))).status, 201);
+  assert.equal((await post(A.writeTok, ret(A, { fromLocationId: from.id, toLocationId: q.id }))).status, 201);
+  assert.equal(await onHandQty(A.tenant, A.d.variant, from.id), '48.000');
+  assert.equal(await onHandQty(A.tenant, A.d.variant, q.id), '1.000');
+});
+
+test('A: a return cannot send back more than the branch holds (409 insufficient_stock); nothing written', { skip }, async () => {
+  const br = await stockedLoc(A, 'branch', A.d.variant, 3);
+  const n0 = await movementCount(A.tenant);
+  const res = await post(A.writeTok, ret(A, { qty: '4', fromLocationId: br.id, toLocationId: A.wh }));
+  assert.equal(res.status, 409);
+  assert.equal((await j(res)).error.code, 'insufficient_stock');
+  assert.equal(await movementCount(A.tenant), n0);
+  assert.equal(await onHandQty(A.tenant, A.d.variant, br.id), '3.000');
+});
+
+test('A/D2: from === to is refused by the API itself with its own message (by id, by code, mixed)', { skip }, async () => {
+  const br = await stockedLoc(A, 'branch', A.d.variant, 5);
+  const cases: Array<Record<string, unknown>> = [
+    ret(A, { fromLocationId: br.id, toLocationId: br.id }),
+    ret(A, { fromLocationCode: br.code, toLocationCode: br.code.toLowerCase() }),
+    ret(A, { fromLocationId: br.id, toLocationCode: br.code }),
+  ];
+  for (const b of cases) {
+    const res = await post(A.writeTok, b);
+    assert.equal(res.status, 422);
+    const e = (await j(res)).error;
+    assert.match(e.message, /different locations/);
+    assert.match(e.field, /^toLocation/);
+  }
+  assert.equal(await onHandQty(A.tenant, A.d.variant, br.id), '5.000');
+});
+
+test('A: 20 PARALLEL returns of the last unit: exactly one succeeds; branch ends at 0, never negative', { skip }, async () => {
+  const { variant: v } = await freshVariant(A, 'A18-RLAST');
+  const br = await stockedLoc(A, 'branch', v, 1);
+  const rs = await Promise.all(Array.from({ length: 20 }, () => post(A.writeTok, { variantId: v, qty: '1', reason: 'return_from_branch', fromLocationId: br.id, toLocationId: A.wh })));
+  const st = rs.map((r) => r.status);
+  assert.equal(st.filter((s) => s === 201).length, 1, `statuses ${st.join(',')}`);
+  assert.equal(st.filter((s) => s === 409).length, 19);
+  assert.equal(await onHandQty(A.tenant, v, br.id), '0.000');
+  assert.equal(await onHandQty(A.tenant, v, A.wh), '1.000');
+});
+
+test('B: a location at 999999999.000 can still be debited; a credit past 999999999.999 is 409 quantity_limit — never a 500', { skip }, async () => {
+  const O = await build('OVF');
+  const { variant, item } = await freshVariant(O, 'OVF-BIG');
+  await ownerDo((o) =>
+    o.query(
+      `insert into stock_movements (tenant_id, variant_id, qty, reason, to_location_id, actor_user_id) values ($1,$2,'999999999.000','opening_balance',$3,$4)`,
+      [O.tenant, variant, O.wh, O.user],
+    ),
+  );
+  await withTenant(await getAppPool(), O.tenant, (db) => setLocationLevel(db, { itemId: item, locationId: O.wh, minQty: 5 }));
+  const br = await stockedLoc(O, 'branch', variant, 10);
+  const sell = (q: string) => post(O.writeTok, { variantId: variant, qty: q, reason: 'sale', fromLocationId: O.wh });
+  const give = (q: string) => post(O.writeTok, { variantId: variant, qty: q, reason: 'return_from_branch', fromLocationId: br.id, toLocationId: O.wh });
+  let res = await sell('1');
+  assert.equal(res.status, 201, await res.clone().text());
+  assert.equal(await onHandQty(O.tenant, variant, O.wh), '999999998.000');
+  res = await give('2'); // 999999998 + 2 = 1e9 > 999999999.999
+  assert.equal(res.status, 409);
+  assert.equal((await j(res)).error.code, 'quantity_limit');
+  assert.equal(await onHandQty(O.tenant, variant, br.id), '10.000', 'a refused credit moves nothing');
+  res = await give('1'); // exactly 999999999.000
+  assert.equal(res.status, 201);
+  res = await give('1.000'); // 1000000000.000 would overflow
+  assert.equal(res.status, 409);
+  res = await sell('999999999');
+  assert.equal(res.status, 201, 'a debit from a huge balance works');
+  assert.equal(await onHandQty(O.tenant, variant, O.wh), '0.000');
+});
+
+test('C1: authenticated may UPDATE only domain_events.delivered_at (by privilege, not just by trigger)', { skip }, async () => {
+  const q = (sql: string) => ownerDo(async (o) => (await o.query(sql)).rows[0].p as boolean);
+  assert.equal(await q(`select has_table_privilege('authenticated','public.domain_events','UPDATE') p`), false);
+  assert.equal(await q(`select has_column_privilege('authenticated','public.domain_events','delivered_at','UPDATE') p`), true);
+  for (const c of ['payload', 'type', 'tenant_id', 'occurred_at', 'id']) {
+    assert.equal(await q(`select has_column_privilege('authenticated','public.domain_events','${c}','UPDATE') p`), false, c);
+  }
+});
+
+test('C2: delivered_at is write-once (NULL -> value only), for authenticated AND the owner', { skip }, async () => {
+  const pool = await getAppPool();
+  for (let i = 0; i < 3; i++) assert.equal((await post(A.writeTok, sale(A))).status, 201); // events to work on, independent of test order
+  const { rows } = await ownerDo((o) => o.query(`select id from domain_events where tenant_id=$1 and delivered_at is null order by occurred_at limit 3`, [A.tenant]));
+  const [e1, e2] = [rows[0].id as string, rows[1].id as string];
+  await withTenant(pool, A.tenant, (db) => db.query(`update domain_events set delivered_at = now() where id=$1`, [e1]));
+  await assert.rejects(withTenant(pool, A.tenant, (db) => db.query(`update domain_events set delivered_at = null where id=$1`, [e1])), /write-once/);
+  await assert.rejects(withTenant(pool, A.tenant, (db) => db.query(`update domain_events set delivered_at = now() + interval '1 day' where id=$1`, [e1])), /write-once/);
+  await ownerDo((o) => o.query(`update domain_events set delivered_at = now() where id=$1`, [e2]));
+  await assert.rejects(ownerDo((o) => o.query(`update domain_events set delivered_at = null where id=$1`, [e2])), /write-once/);
+  await assert.rejects(ownerDo((o) => o.query(`update domain_events set delivered_at = now() + interval '1 day' where id=$1`, [e2])), /write-once/);
+  // a no-op rewrite of the same value is harmless
+  await ownerDo((o) => o.query(`update domain_events set delivered_at = delivered_at where id=$1`, [e2]));
+});
+
+test('C3: subscription URLs refuse userinfo, loopback, private, link-local and IPv6-literal hosts; a normal https host is accepted', { skip }, async () => {
+  const pool = await getAppPool();
+  const ins = (url: string) =>
+    withTenant(pool, A.tenant, (db) => db.query(`insert into event_subscriptions (tenant_id, client_id, event_type, url) values ($1, $2, 'stock.low', $3)`, [A.tenant, A.writeId, url]));
+  const refused = [
+    'https://a@b.com', 'https://user:pw@hooks.example.com/x', 'https://hooks.example.com@evil.com/',
+    'https://localhost/x', 'https://LOCALHOST:8443/x', 'https://app.localhost/x', 'https://db.internal/x', 'https://printer.local/x', 'https://localhost./x',
+    'https://127.0.0.1/x', 'https://127.1.2.3:9/x', 'https://0.0.0.0/x', 'https://0.1.2.3/x', 'https://10.0.0.5/x', 'https://10.255.255.255/',
+    'https://100.64.0.1/x', 'https://100.127.255.255/x', 'https://169.254.169.254/latest/meta-data', 'https://172.16.0.1/x', 'https://172.31.255.255/x',
+    'https://192.168.1.1/x', 'https://[::1]/x', 'https://[2001:db8::1]:8443/x', 'https://[::ffff:127.0.0.1]/x',
+    'https://2130706433/x', 'https://0x7f000001/x', 'https://0177.0.0.1/x', 'https://127.1/x',
+    'https://localhost\\.evil.com/x', 'https://999.1.1.1/x', 'https://1.256.3.4/x', 'https://1.2.256.4/x', 'https://1.2.3.256/x',
+  ];
+  for (const url of refused) await assert.rejects(ins(url), /check|violates/, url);
+  for (const url of ['https://hooks.example.com/x', 'https://hooks.example.com:8443/a?b=c', 'https://8.8.8.8/x', 'https://100.63.0.1/x', 'https://172.15.0.1/x', 'https://172.32.0.1/x', 'https://192.169.0.1/x', 'https://localhost.example.com/x', 'https://internalfoo.example.com/x']) {
+    await ins(url);
+  }
+});
+
+test('D1: the same key with a different occurredAt is 409; the same occurredAt dedupes', { skip }, async () => {
+  const key = nextKey('occ');
+  const t1 = new Date(Date.now() - 3600_000).toISOString();
+  const t2 = new Date(Date.now() - 7200_000).toISOString();
+  assert.equal((await post(A.writeTok, sale(A, { occurredAt: t1 }), { key })).status, 201);
+  assert.equal((await post(A.writeTok, sale(A, { occurredAt: t1 }), { key })).status, 200);
+  const res = await post(A.writeTok, sale(A, { occurredAt: t2 }), { key });
+  assert.equal(res.status, 409);
+  assert.equal((await j(res)).error.code, 'idempotency_conflict');
+});
+
+
+test('B: 20 PARALLEL credits at the edge of the range: only the ones that fit succeed, never past 999999999.999', { skip }, async () => {
+  const O = await build('OV2');
+  const { variant } = await freshVariant(O, 'OV2-BIG');
+  await ownerDo((o) =>
+    o.query(`insert into stock_movements (tenant_id, variant_id, qty, reason, to_location_id, actor_user_id) values ($1,$2,'999999995.000','opening_balance',$3,$4)`, [O.tenant, variant, O.wh, O.user]),
+  );
+  // one branch per racer so the debit sides do not serialise the credits on the same lock
+  const brs = await Promise.all(Array.from({ length: 20 }, () => stockedLoc(O, 'branch', variant, 1)));
+  const rs = await Promise.all(brs.map((b) => post(O.writeTok, { variantId: variant, qty: '1', reason: 'return_from_branch', fromLocationId: b.id, toLocationId: O.wh })));
+  const st = rs.map((r) => r.status);
+  assert.equal(st.filter((s) => s === 201).length, 4, `statuses ${st.join(',')}`);
+  assert.equal(st.filter((s) => s === 409).length, 16);
+  assert.equal(await onHandQty(O.tenant, variant, O.wh), '999999999.000');
+});
+
+test('B: a ledger ALREADY past 1e9 at a location (owner inserts) is still debitable and never 500s; credits are 409 quantity_limit', { skip }, async () => {
+  const O = await build('OV3');
+  const { variant, item } = await freshVariant(O, 'OV3-HUGE');
+  for (let i = 0; i < 2; i++) {
+    await ownerDo((o) =>
+      o.query(`insert into stock_movements (tenant_id, variant_id, qty, reason, to_location_id, actor_user_id) values ($1,$2,'999999999.000','opening_balance',$3,$4)`, [O.tenant, variant, O.wh, O.user]),
+    );
+  }
+  await withTenant(await getAppPool(), O.tenant, (db) => setLocationLevel(db, { itemId: item, locationId: O.wh, minQty: 5 }));
+  const br = await stockedLoc(O, 'branch', variant, 10);
+  let res = await post(O.writeTok, { variantId: variant, qty: '1', reason: 'sale', fromLocationId: O.wh });
+  assert.equal(res.status, 201, await res.clone().text());
+  res = await post(O.writeTok, { variantId: variant, qty: '1', reason: 'consumption', fromLocationId: O.wh });
+  assert.equal(res.status, 201);
+  res = await post(O.writeTok, { variantId: variant, qty: '1', reason: 'return_from_branch', fromLocationId: br.id, toLocationId: O.wh });
+  assert.equal(res.status, 409);
+  assert.equal((await j(res)).error.code, 'quantity_limit');
+  res = await post(O.writeTok, { variantId: variant, qty: '5000', reason: 'sale', fromLocationId: O.wh });
+  assert.equal(res.status, 201);
+});
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test('D4: the API debit WAITS for a UI-side guarded debit (postReturn) holding the same (variant, location) lock, then sees its effect: never negative', { skip }, async () => {
+  const pool = await getAppPool();
+  const { postReturn } = await import('../../src/db/returns.ts');
+  const { variant } = await freshVariant(A, 'A18-RACE');
+  const br = await stockedLoc(A, 'branch', variant, 1);
+  let uiHolding!: () => void;
+  const held = new Promise<void>((r) => (uiHolding = r));
+  let uiCommit!: () => void;
+  const gate = new Promise<void>((r) => (uiCommit = r));
+  // the UI writer takes the last unit and keeps the pair lock (uncommitted) until we say so
+  const ui = withTenant(pool, A.tenant, async (db) => {
+    await postReturn(db, { variantId: variant, fromLocationId: br.id, qty: 1, disposition: 'restock', actorUserId: A.user, idempotencyKey: `ui-${process.pid}-${Date.now()}` });
+    uiHolding();
+    await gate;
+  });
+  await held;
+  let apiDone = false;
+  const api = withTenant(pool, A.tenant, (db2) =>
+    executeMovement({ db: db2, clientId: A.writeId, tenantId: A.tenant, idempotencyKey: `race-${process.pid}-${Date.now()}`, body: {} }, parseMovementBody({ variantId: variant, qty: '1', reason: 'sale', fromLocationId: br.id })),
+  ).then(
+    (r) => ((apiDone = true), r),
+    (e) => ((apiDone = true), e),
+  );
+  await sleep(500);
+  const blocked = !apiDone;
+  uiCommit(); // always release, so a failing assertion cannot leave the UI transaction (and the pool) hanging
+  await ui;
+  const out: any = await api;
+  assert.equal(blocked, true, 'the API write must be blocked on the pair lock while the UI debit is uncommitted');
+  assert.equal(out.status, 409, 'after the UI debit commits the API sees 0 and refuses');
+  assert.equal(out.code, 'insufficient_stock');
+  assert.equal(await onHandQty(A.tenant, variant, br.id), '0.000');
+});
+
+test('D5: the idempotency-key lock: a concurrent retry waits for the first commit and answers 200 deduped (without the lock it fails on the unique key)', { skip }, async () => {
+  const pool = await getAppPool();
+  const key = nextKey('d5');
+  const mk = (db: any, hooks = {}) =>
+    executeMovement({ db, clientId: A.writeId, tenantId: A.tenant, idempotencyKey: key, body: {} }, parseMovementBody(sale(A, { qty: '1' })), hooks);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let entered!: () => void;
+  const inHook = new Promise<void>((r) => (entered = r));
+  const t1 = withTenant(pool, A.tenant, (db) => mk(db, { beforeCommit: async () => { entered(); await gate; } }));
+  await inHook;
+  const t2 = withTenant(pool, A.tenant, (db) => mk(db)).then((r) => r, (e) => e);
+  await sleep(400);
+  release();
+  const r1: any = await t1;
+  const r2: any = await t2;
+  assert.equal(r1.status, 201);
+  assert.equal(r2.status, 200, String(r2?.message ?? ''));
+  assert.deepEqual(r2.body.data, { id: r1.body.data.id, deduped: true });
+  assert.equal(await movementCount(A.tenant, `api:${A.writeId}:${key}`), 1);
 });
