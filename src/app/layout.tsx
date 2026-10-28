@@ -1,28 +1,40 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
-import { DEFAULT_LANG, DIRECTION, t } from '../i18n';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
+import { DIRECTION, t } from '../i18n';
+import { getRequestLang } from '../i18n/request';
 
 import './globals.css';
 
 /**
- * The root layout — Arabic-first and RIGHT-TO-LEFT.
+ * The root layout — Arabic-first, with a per-user language override.
  *
- * `<html lang="ar" dir="rtl">` is the whole shell's direction: everything
- * inherits RTL from here, and the single LTR exception (barcode entry, a later
- * task) opts out with the `.ltr-value` class defined in globals.css. The
- * (Arabic) title and description come from the i18n dictionary, so even the
- * document chrome is translated.
+ * The language is resolved ONCE per request by `getRequestLang` (the `lang`
+ * cookie set to the user's preference, then the browser's `Accept-Language`,
+ * then Arabic), and everything — the `<html lang dir>`, the title, and every
+ * screen's `t()` call — follows it. `dir` flips the whole shell between
+ * right-to-left (Arabic) and left-to-right (English); the single
+ * LTR-inside-RTL exception (barcode entry) opts out with `.ltr-value`.
  */
-export const metadata: Metadata = {
-  title: t('app.title'),
-  description: t('app.description'),
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const lang = await getRequestLang();
+  return {
+    title: t('app.title', lang),
+    description: t('app.description', lang),
+  };
+}
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const lang = await getRequestLang();
   return (
-    <html lang={DEFAULT_LANG} dir={DIRECTION[DEFAULT_LANG]}>
-      <body>{children}</body>
+    <html lang={lang} dir={DIRECTION[lang]}>
+      <body>
+        <header>
+          <LanguageSwitcher lang={lang} />
+        </header>
+        {children}
+      </body>
     </html>
   );
 }

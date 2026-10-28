@@ -1,6 +1,6 @@
 'use client';
 
-import { formatNumber, t } from '../i18n';
+import { formatNumber, t, type Lang } from '../i18n';
 
 /**
  * What the delivery note said against what is actually on the lorry.
@@ -11,17 +11,8 @@ import { formatNumber, t } from '../i18n';
  * warning style, with the signed difference. It is a REPORT — the numbers the
  * person typed are never rewritten to match.
  *
- * IT ALSO SHOWS WHAT HAS NOT ARRIVED. A line with no received quantity yet is
- * not a variance (goods that have not arrived are not a shortage — a delivery
- * in parts must stay expressible), so it is listed separately as "not yet
- * received" rather than folded into a shortfall.
- *
- * Nothing to report ⇒ nothing on screen: when every line matches, this renders
- * no markup at all, so the door does not grow a permanent red banner.
- *
- * Numbers go through the Task 11 formatters, so the digits are LATIN in every
- * language — an Arabic-Indic quantity would not match the paper it was copied
- * from (see src/i18n/index.ts).
+ * `lang` is the request's resolved language, passed down from the server page,
+ * so the labels and numbers follow the app's language and direction.
  */
 export interface ExpectedVsReceivedLine {
   variantId: string;
@@ -33,7 +24,13 @@ export interface ExpectedVsReceivedLine {
   received: number | null;
 }
 
-export function ExpectedVsReceived({ lines }: { lines: ReadonlyArray<ExpectedVsReceivedLine> }) {
+export function ExpectedVsReceived({
+  lines,
+  lang,
+}: {
+  lines: ReadonlyArray<ExpectedVsReceivedLine>;
+  lang: Lang;
+}) {
   const notable = lines.filter(
     (line) => line.received == null || (line.expected != null && line.received !== line.expected),
   );
@@ -41,7 +38,7 @@ export function ExpectedVsReceived({ lines }: { lines: ReadonlyArray<ExpectedVsR
 
   return (
     <section className="variance-block" aria-live="polite">
-      <h2 className="variance-heading">{t('intake.variance.heading')}</h2>
+      <h2 className="variance-heading">{t('intake.variance.heading', lang)}</h2>
       <ul className="variance-list">
         {notable.map((line) => {
           const pending = line.received == null;
@@ -54,12 +51,13 @@ export function ExpectedVsReceived({ lines }: { lines: ReadonlyArray<ExpectedVsR
               <span className="ltr-value variance-code">{line.code}</span>
               <span className="variance-detail">
                 {pending
-                  ? t('intake.not_received')
+                  ? t('intake.not_received', lang)
                   : t('intake.variance.line', {
+                      lang,
                       params: {
-                        expected: formatNumber(expected),
-                        received: formatNumber(line.received ?? 0),
-                        variance: formatNumber((line.received ?? 0) - expected),
+                        expected: formatNumber(expected, lang),
+                        received: formatNumber(line.received ?? 0, lang),
+                        variance: formatNumber((line.received ?? 0) - expected, lang),
                       },
                     })}
               </span>

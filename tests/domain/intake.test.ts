@@ -829,11 +829,10 @@ test('SMOKE (source grep): the intake actions still look like the app’s one se
   assert.match(page, /frontDoor\(/, 'the page must resolve who is asking before it renders the door');
   assert.match(page, /canReceive\(/, 'the page must refuse a role that may not receive goods');
   assert.match(page, /IntakeScreen/, 'the page must render the door');
-  assert.equal(
-    (page.match(/dir="rtl"/g) ?? []).length > 0,
-    true,
-    'the screen is Arabic and right-to-left',
-  );
+  // Direction is now owned by the root layout (`dir={DIRECTION[lang]}`), so the
+  // app flips RTL/LTR with the resolved language. A page hardcoding its own
+  // direction would fight that switch.
+  assert.doesNotMatch(page, /dir="rtl"/, 'the page must inherit its direction from the root layout');
 });
 
 test('SMOKE (source grep): the barcode field opts out of RTL, and shared form styles are reused', () => {

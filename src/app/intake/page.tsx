@@ -8,40 +8,29 @@ import { getAppPool } from '../../db/app-pool';
 import { withTenant } from '../../db/client';
 import { canReceive } from '../../domain/intake';
 import { t } from '../../i18n';
+import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../sign-in/contract';
 import { frontDoor } from './handler';
 
-export const metadata = { title: t('intake.title') };
+export async function generateMetadata() {
+  const lang = await getRequestLang();
+  return { title: t('intake.title', lang) };
+}
 
 /**
  * THE INTAKE DOOR — where a lorry's goods are counted in.
  *
  * THE GATE IS HERE, AND IT IS THE SAME GATE AS EVERYWHERE ELSE. The session
- * cookie is resolved by `frontDoor` inside ONE `withTenant` boundary — the app's
- * own pool (`await getAppPool()`, which refuses to serve as a superuser) scoped
- * to the deployment's tenant — and that one pass also answers what the screen
- * needs (who is asking, the locations goods may come from, and the warehouse
- * they arrive at), so the page never opens a second boundary. `withTenant` is
- * not re-entrant; it is opened exactly once, here.
+ * cookie is resolved by `frontDoor` inside ONE `withTenant` boundary, and that
+ * one pass also answers what the screen needs, so the page never opens a second
+ * boundary. `withTenant` is not re-entrant; it is opened exactly once, here.
  *
- * TWO REFUSALS, BOTH SERVER-SIDE:
- *
- *   * not signed in → the sign-in page (the same redirect the home page uses,
- *     and the second half of the gate `src/proxy.ts` starts);
- *   * signed in but not a warehouse role → the screen is NOT RENDERED AT ALL.
- *     That is a courtesy, not the control: {@link canReceive} is re-asserted
- *     here so a `branch_user` never sees a form, and the ACTION asserts it
- *     again, so nothing is written even if the screen were shown. A hidden
- *     button is not a permission.
- *
- * The page is Arabic and RIGHT-TO-LEFT (`dir="rtl"`, inherited from the root
- * layout and stated here so the screen stands alone); the only LTR exception is
- * inside the scan field, where a machine-read code must not be reversed.
- *
- * Reading a cookie makes this page DYNAMIC, which is the point: a static intake
- * door is a page that cannot tell who is asking.
+ * TWO REFUSALS, BOTH SERVER-SIDE: not signed in → the sign-in page; signed in
+ * but not a warehouse role → the screen is NOT RENDERED AT ALL (`canReceive` is
+ * also re-asserted in the action, so nothing is written even if it were shown).
  */
 export default async function IntakePage() {
+  const lang = await getRequestLang();
   const store = await cookies();
   const cookie = store.get(SESSION_COOKIE)?.value;
 
@@ -58,12 +47,13 @@ export default async function IntakePage() {
   const destName = door.dest ? `${door.dest.name_ar} (${door.dest.code})` : null;
 
   return (
-    <main dir="rtl">
-      <h1>{t('intake.title')}</h1>
+    <main>
+      <h1>{t('intake.title', lang)}</h1>
       {mayReceive ? (
         <>
-          <p>{t('intake.subtitle')}</p>
+          <p>{t('intake.subtitle', lang)}</p>
           <IntakeScreen
+            lang={lang}
             sources={door.sources.map((source) => ({
               id: source.id,
               label: `${source.name_ar} (${source.code})`,
@@ -72,10 +62,10 @@ export default async function IntakePage() {
           />
         </>
       ) : (
-        <p role="alert">{t('intake.error.forbidden')}</p>
+        <p role="alert">{t('intake.error.forbidden', lang)}</p>
       )}
       <p>
-        <a href="/">{t('intake.back')}</a>
+        <a href="/">{t('intake.back', lang)}</a>
       </p>
     </main>
   );

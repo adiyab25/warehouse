@@ -7,38 +7,28 @@ import { StockListScreen } from '../../components/StockListScreen';
 import { getAppPool } from '../../db/app-pool';
 import { withTenant } from '../../db/client';
 import { t } from '../../i18n';
+import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../sign-in/contract';
 import { STOCK_REFUSAL_MESSAGE_KEYS, listStock } from './handler';
 
-export const metadata = { title: t('stock.title') };
+export async function generateMetadata() {
+  const lang = await getRequestLang();
+  return { title: t('stock.title', lang) };
+}
 
 /**
  * THE STOCK LIST — "what do we have, where, how many".
  *
- * THE GATE IS HERE, AND IT IS THE SAME GATE AS EVERYWHERE ELSE. The session
- * cookie is resolved by `listStock` inside ONE `withTenant` boundary (the app's
- * own pool — `await getAppPool()`, which refuses to serve as a superuser — scoped
- * to the deployment's tenant). The page never opens a second boundary;
- * `withTenant` is not re-entrant.
- *
- * THE SCOPING IS THE SERVER'S. A `branch_user` is filtered to their OWN branch in
- * the QUERY (see handler.ts), so another branch's stock never leaves the
- * database — the markup is not a permission. A viewer who may see no stock gets
- * the refusal and NO stock was read for them at all.
- *
- * SEARCH IS SERVER-SIDE and BOUNDED. The needle comes from `?q=` (the GET form's
- * `q`), is passed into the query, and the list is capped — so typing cannot pull
- * an unbounded catalogue into a phone. Reading `searchParams` and a cookie makes
- * this page dynamic, which is the point.
- *
- * The page is Arabic and RIGHT-TO-LEFT (`dir="rtl"`, inherited from the root
- * layout and stated here so the screen stands alone).
+ * The session cookie is resolved by `listStock` inside ONE `withTenant` boundary.
+ * A `branch_user` is filtered to their OWN branch in the QUERY, so another
+ * branch's stock never leaves the database. Search is server-side and bounded.
  */
 export default async function StockPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string | string[] }>;
 }) {
+  const lang = await getRequestLang();
   const sp = await searchParams;
   const search = typeof sp.q === 'string' ? sp.q : '';
 
@@ -52,11 +42,11 @@ export default async function StockPage({
   if (!list.user) redirect(SIGN_IN_PATH);
 
   return (
-    <main dir="rtl">
-      <h1>{t('stock.title')}</h1>
+    <main>
+      <h1>{t('stock.title', lang)}</h1>
       {list.maySee ? (
         <>
-          <p>{t('stock.subtitle')}</p>
+          <p>{t('stock.subtitle', lang)}</p>
           <StockListScreen
             rows={list.rows}
             search={list.search}
@@ -65,10 +55,10 @@ export default async function StockPage({
           />
         </>
       ) : (
-        <p role="alert">{t(STOCK_REFUSAL_MESSAGE_KEYS.forbidden)}</p>
+        <p role="alert">{t(STOCK_REFUSAL_MESSAGE_KEYS.forbidden, lang)}</p>
       )}
       <p>
-        <a href="/">{t('stock.back')}</a>
+        <a href="/">{t('stock.back', lang)}</a>
       </p>
     </main>
   );

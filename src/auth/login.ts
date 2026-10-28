@@ -131,7 +131,7 @@ export interface SignInInput {
 
 /** The outcome of a sign-in attempt. */
 export type SignInResult =
-  | { ok: true; token: string; expiresAt: Date }
+  | { ok: true; token: string; expiresAt: Date; preferredLang: string | null }
   | { ok: false; reason: 'invalid' | 'locked' };
 
 /**
@@ -154,6 +154,7 @@ interface UserRow {
   id: string;
   password_hash: string;
   active: boolean;
+  preferred_lang: string | null;
 }
 
 /**
@@ -189,7 +190,7 @@ export async function signIn(
   //    constraint migration 0012 adds — is what guarantees at most one row, and
   //    a `limit 1` here would quietly hide the day that stops being true.
   const { rows } = await db.query<UserRow>(
-    `select id, password_hash, active
+    `select id, password_hash, active, preferred_lang
        from app_users
       where username = $1`,
     [username],
@@ -218,7 +219,7 @@ export async function signIn(
   const session = await openSession(db, { userId: user.id });
   await recordAttempt(db, username, true);
 
-  return { ok: true, token: session.token, expiresAt: session.expiresAt };
+  return { ok: true, token: session.token, expiresAt: session.expiresAt, preferredLang: user.preferred_lang ?? null };
 }
 
 /**

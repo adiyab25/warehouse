@@ -1,6 +1,7 @@
 import type { MovementDetail } from '../db/usage';
 import { REASON_MESSAGE_KEYS } from '../domain/movement';
-import { formatDate, formatNumber, t } from '../i18n';
+import { formatDate, formatNumber, t, type Lang } from '../i18n';
+import { getRequestLang } from '../i18n/request';
 import type { StockRowView } from '../app/stock/handler';
 
 /**
@@ -10,17 +11,8 @@ import type { StockRowView } from '../app/stock/handler';
  * A READ-ONLY server component (no state, no action). It answers the owner's
  * question literally: what do we have, where, how many, who took it, and when.
  *
- * Three rules it is built to honour:
- *
- *   * THE ADDRESS IS A PLACE AND THE ACTOR IS A PERSON. Locations are shown by
- *     their Arabic NAME and the actor by their display NAME (joined in SQL), so
- *     no raw uuid reaches the screen. A movement with no human actor (a system
- *     correction) says "system" rather than showing a blank.
- *   * THE REASON IS A TRANSLATED LABEL, never a raw enum — every reason goes
- *     through {@link REASON_MESSAGE_KEYS}.
- *   * EVERY NUMBER AND DATE goes through the Task 11 formatters, so an `ar`
- *     screen shows Latin digits that match the ledger, and a quantity is EGP's
- *     only kind of number here.
+ * The language is read once (`getRequestLang`) and threaded through every label,
+ * reason, date and number, so English renders English month names and copy.
  */
 export interface StockHistoryScreenProps {
   sku: string;
@@ -33,12 +25,12 @@ export interface StockHistoryScreenProps {
 }
 
 /** The translated label for a movement reason — never the raw enum value. */
-export function reasonLabel(reason: string): string {
+export function reasonLabel(reason: string, lang: Lang): string {
   const key = REASON_MESSAGE_KEYS[reason as keyof typeof REASON_MESSAGE_KEYS];
-  return key ? t(key) : reason;
+  return key ? t(key, lang) : reason;
 }
 
-export function StockHistoryScreen({
+export async function StockHistoryScreen({
   sku,
   nameAr,
   onHand,
@@ -46,6 +38,7 @@ export function StockHistoryScreen({
   truncated,
   branchLabel,
 }: StockHistoryScreenProps) {
+  const lang = await getRequestLang();
   return (
     <div className="stock">
       <p className="stock-variant">
@@ -53,20 +46,20 @@ export function StockHistoryScreen({
         <span className="ltr-value stock-sku">{sku}</span>
       </p>
       {branchLabel ? (
-        <p className="stock-scope">{t('stock.scope.branch', { params: { name: branchLabel } })}</p>
+        <p className="stock-scope">{t('stock.scope.branch', { lang, params: { name: branchLabel } })}</p>
       ) : null}
 
       <section className="stock-section">
-        <h2>{t('stock.detail.onhand')}</h2>
+        <h2>{t('stock.detail.onhand', lang)}</h2>
         {onHand.length === 0 ? (
-          <p className="field-hint">{t('stock.detail.onhand_empty')}</p>
+          <p className="field-hint">{t('stock.detail.onhand_empty', lang)}</p>
         ) : (
           <ul className="stock-list">
             {onHand.map((row) => (
               <li key={row.location} className="stock-balance">
                 <span className="stock-location">{row.location}</span>
                 <span className="stock-qty">
-                  {t('stock.col.qty')}: {formatNumber(Number(row.qty))}
+                  {t('stock.col.qty', lang)}: {formatNumber(Number(row.qty), lang)}
                 </span>
               </li>
             ))}
@@ -75,41 +68,35 @@ export function StockHistoryScreen({
       </section>
 
       <section className="stock-section">
-        <h2>{t('stock.detail.movements')}</h2>
+        <h2>{t('stock.detail.movements', lang)}</h2>
         {movements.length === 0 ? (
-          <p className="field-hint">{t('stock.detail.empty_movements')}</p>
+          <p className="field-hint">{t('stock.detail.empty_movements', lang)}</p>
         ) : (
           <ol className="stock-movements">
             {movements.map((m) => (
               <li key={m.seq} className="stock-movement">
                 <div className="stock-movement-head">
-                  <span className="stock-reason">{reasonLabel(m.reason)}</span>
+                  <span className="stock-reason">{reasonLabel(m.reason, lang)}</span>
                   <span className="stock-qty">
-                    {t('stock.movement.qty')}: {formatNumber(Number(m.qty))}
+                    {t('stock.movement.qty', lang)}: {formatNumber(Number(m.qty), lang)}
                   </span>
                 </div>
                 <dl className="stock-movement-detail">
                   <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.from')}</dt>
-                    {/* A location shown by its Arabic NAME; a one-sided movement
-                        states the missing side with the shared dash, not blank. */}
-                    <dd className="stock-location">
-                      {m.fromLocation ?? t('stock.none')}
-                    </dd>
+                    <dt>{t('stock.movement.from', lang)}</dt>
+                    <dd className="stock-location">{m.fromLocation ?? t('stock.none', lang)}</dd>
                   </div>
                   <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.to')}</dt>
-                    <dd className="stock-location">
-                      {m.toLocation ?? t('stock.none')}
-                    </dd>
+                    <dt>{t('stock.movement.to', lang)}</dt>
+                    <dd className="stock-location">{m.toLocation ?? t('stock.none', lang)}</dd>
                   </div>
                   <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.actor')}</dt>
-                    <dd className="stock-actor">{m.actorName ?? t('stock.actor.system')}</dd>
+                    <dt>{t('stock.movement.actor', lang)}</dt>
+                    <dd className="stock-actor">{m.actorName ?? t('stock.actor.system', lang)}</dd>
                   </div>
                   <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.at')}</dt>
-                    <dd className="stock-at">{formatDate(new Date(m.occurredAt))}</dd>
+                    <dt>{t('stock.movement.at', lang)}</dt>
+                    <dd className="stock-at">{formatDate(new Date(m.occurredAt), lang)}</dd>
                   </div>
                 </dl>
               </li>
@@ -118,7 +105,7 @@ export function StockHistoryScreen({
         )}
         {truncated ? (
           <p className="stock-truncated" role="status">
-            {t('stock.detail.truncated', { params: { count: formatNumber(movements.length) } })}
+            {t('stock.detail.truncated', { lang, params: { count: formatNumber(movements.length, lang) } })}
           </p>
         ) : null}
       </section>

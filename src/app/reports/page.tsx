@@ -7,20 +7,25 @@ import { ReplenishmentScreen } from '../../components/ReplenishmentScreen';
 import { getAppPool } from '../../db/app-pool';
 import { withTenant } from '../../db/client';
 import { t } from '../../i18n';
+import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../sign-in/contract';
 import { REPORT_REFUSAL_MESSAGE_KEYS, getReplenishmentReport } from './handler';
 
-export const metadata = { title: t('reports.heading') };
+export async function generateMetadata() {
+  const lang = await getRequestLang();
+  return { title: t('reports.heading', lang) };
+}
 
 /**
  * THE REPLENISHMENT REPORT — what is at or below its minimum, per branch.
  *
  * The session is resolved by `getReplenishmentReport` inside ONE `withTenant`
- * boundary; the scope (the owner sees every branch, a branch user only their own)
- * comes from the SESSION server-side, never from the request. A coded refusal maps
- * to its OWN sentence; an expired session redirects to sign-in.
+ * boundary; the scope comes from the SESSION server-side, never from the request.
+ * A coded refusal maps to its OWN sentence; an expired session redirects to
+ * sign-in.
  */
 export default async function ReportsPage() {
+  const lang = await getRequestLang();
   const store = await cookies();
   const cookie = store.get(SESSION_COOKIE)?.value;
 
@@ -31,8 +36,8 @@ export default async function ReportsPage() {
   if (!report.ok && report.error === 'unauthenticated') redirect(SIGN_IN_PATH);
 
   return (
-    <main dir="rtl">
-      <h1>{t('reports.heading')}</h1>
+    <main>
+      <h1>{t('reports.heading', lang)}</h1>
       {report.ok ? (
         <ReplenishmentScreen
           groups={report.groups}
@@ -42,10 +47,10 @@ export default async function ReportsPage() {
           branchLabel={report.scope === 'branch' ? report.branchLabel : null}
         />
       ) : (
-        <p role="alert">{t(REPORT_REFUSAL_MESSAGE_KEYS[report.error])}</p>
+        <p role="alert">{t(REPORT_REFUSAL_MESSAGE_KEYS[report.error], lang)}</p>
       )}
       <p>
-        <a href="/">{t('reports.back')}</a>
+        <a href="/">{t('reports.back', lang)}</a>
       </p>
     </main>
   );

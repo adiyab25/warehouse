@@ -1,45 +1,39 @@
 import { t } from '../../i18n';
+import { getRequestLang } from '../../i18n/request';
 
 import { signInAction } from './actions';
 import { ERROR_PARAM, USERNAME_FIELD } from './contract';
 
-export const metadata = { title: t('sign_in.title') };
+export async function generateMetadata() {
+  const lang = await getRequestLang();
+  return { title: t('sign_in.title', lang) };
+}
 
 /**
- * The sign-in form. Arabic, RTL (inherited from the root layout), posting to
- * the {@link signInAction} server action.
- *
- * THE FIELD IS THE USERNAME. Identity is the short assigned username
- * (`app_users.username`, unique per tenant), NOT the person's name — two
- * colleagues may share a name, and a name is not something the app can match
- * exactly. `autoComplete="username"` tells a password manager which field this
- * is, so the pair it saves is the one the person actually signs in with.
- *
- * The reason for a failure rides back as a query parameter and is turned into a
- * translated message; the typed username rides back too, so a mistyped PASSWORD
- * does not cost the person their username as well. The password is never
- * echoed, never stored in the URL, and never logged.
+ * The sign-in form, posting to the {@link signInAction} server action, in the
+ * request's resolved language (the browser's, until a preference is set).
  */
 export default async function SignInPage({
   searchParams,
 }: {
   searchParams: Promise<{ [ERROR_PARAM]?: string; [USERNAME_FIELD]?: string }>;
 }) {
+  const lang = await getRequestLang();
   const { error, username } = await searchParams;
   const message =
     error === 'locked'
-      ? t('sign_in.error.locked')
+      ? t('sign_in.error.locked', lang)
       : error === 'invalid'
-        ? t('sign_in.error.invalid')
+        ? t('sign_in.error.invalid', lang)
         : null;
 
   return (
     <main>
-      <h1>{t('sign_in.title')}</h1>
+      <h1>{t('sign_in.title', lang)}</h1>
       {message ? <p role="alert">{message}</p> : null}
       <form action={signInAction}>
         <label>
-          {t('sign_in.username')}
+          {t('sign_in.username', lang)}
           <input
             name={USERNAME_FIELD}
             autoComplete="username"
@@ -48,10 +42,10 @@ export default async function SignInPage({
           />
         </label>
         <label>
-          {t('sign_in.password')}
+          {t('sign_in.password', lang)}
           <input name="password" type="password" autoComplete="current-password" required />
         </label>
-        <button type="submit">{t('sign_in.submit')}</button>
+        <button type="submit">{t('sign_in.submit', lang)}</button>
       </form>
     </main>
   );

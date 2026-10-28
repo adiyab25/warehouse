@@ -7,6 +7,7 @@ import { signIn } from '../../auth/login';
 import { configuredTenantId } from '../../auth/tenant';
 import { withTenant } from '../../db/client';
 import { getAppPool } from '../../db/app-pool';
+import { LANG_COOKIE, langCookieOptions } from '../../i18n/request';
 import {
   SESSION_COOKIE,
   SIGNED_IN_REDIRECT,
@@ -40,6 +41,14 @@ export async function signInAction(formData: FormData): Promise<void> {
   if (result.ok) {
     const store = await cookies();
     store.set(SESSION_COOKIE, result.token, sessionCookieOptions(result.expiresAt));
+    // The per-user language override rides in a cookie: set it to the user's
+    // preference, or clear it so the browser's own language governs (they
+    // chose "follow the browser first, override per user").
+    if (result.preferredLang === 'ar' || result.preferredLang === 'en') {
+      store.set(LANG_COOKIE, result.preferredLang, langCookieOptions());
+    } else {
+      store.delete(LANG_COOKIE);
+    }
     // redirect() throws, so nothing below runs on success.
     redirect(SIGNED_IN_REDIRECT);
   }

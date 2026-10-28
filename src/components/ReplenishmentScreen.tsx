@@ -1,5 +1,6 @@
 import type { ReplenishmentGroup } from '../app/reports/handler';
 import { formatNumber, t } from '../i18n';
+import { getRequestLang } from '../i18n/request';
 
 /**
  * THE REPLENISHMENT REPORT — one table per branch, lowest cover first (the
@@ -8,9 +9,8 @@ import { formatNumber, t } from '../i18n';
  * A READ-ONLY server component. Quantities arrive as exact `numeric` STRINGS from
  * SQL (the cover and the rate are computed there too); they are FORMATTED here for
  * display (Latin digits, via `formatNumber`) and no arithmetic is done on them. A
- * cover of `null` is "not enough history", never a blank or an Infinity.
- * Layout is in globals.css; every catalogue string sits in a cell that carries
- * `min-width: 0` + `overflow-wrap: anywhere`, so a long name cannot blow 390px.
+ * cover of `null` is "not enough history", never a blank or an Infinity. The
+ * language is read once (`getRequestLang`) and threaded through every label.
  */
 export interface ReplenishmentScreenProps {
   groups: ReplenishmentGroup[];
@@ -21,17 +21,18 @@ export interface ReplenishmentScreenProps {
   branchLabel: string | null;
 }
 
-export function ReplenishmentScreen({ groups, days, truncated, limit, branchLabel }: ReplenishmentScreenProps) {
+export async function ReplenishmentScreen({ groups, days, truncated, limit, branchLabel }: ReplenishmentScreenProps) {
+  const lang = await getRequestLang();
   return (
     <div className="replenishment">
-      <p className="stock-usage-note">{t('reports.subtitle')}</p>
-      <p className="stock-usage-note">{t('reports.window_note', { params: { days: formatNumber(days) } })}</p>
+      <p className="stock-usage-note">{t('reports.subtitle', lang)}</p>
+      <p className="stock-usage-note">{t('reports.window_note', { lang, params: { days: formatNumber(days, lang) } })}</p>
       {branchLabel ? (
-        <p className="stock-usage-window">{t('reports.branch_scope', { params: { branch: branchLabel } })}</p>
+        <p className="stock-usage-window">{t('reports.branch_scope', { lang, params: { branch: branchLabel } })}</p>
       ) : null}
 
       {groups.length === 0 ? (
-        <p className="field-hint">{t('reports.empty')}</p>
+        <p className="field-hint">{t('reports.empty', lang)}</p>
       ) : (
         groups.map((group) => (
           <section key={group.locationId} className="replenishment-branch">
@@ -39,27 +40,27 @@ export function ReplenishmentScreen({ groups, days, truncated, limit, branchLabe
             <table className="replenishment-table">
               <thead>
                 <tr>
-                  <th scope="col" className="replenishment-item">{t('reports.col.item')}</th>
-                  <th scope="col">{t('reports.col.on_hand')}</th>
-                  <th scope="col">{t('reports.col.min')}</th>
-                  <th scope="col">{t('reports.col.cover')}</th>
+                  <th scope="col" className="replenishment-item">{t('reports.col.item', lang)}</th>
+                  <th scope="col">{t('reports.col.on_hand', lang)}</th>
+                  <th scope="col">{t('reports.col.min', lang)}</th>
+                  <th scope="col">{t('reports.col.cover', lang)}</th>
                 </tr>
               </thead>
               <tbody>
                 {group.rows.map((row) => (
                   <tr key={row.itemId}>
                     <td className="replenishment-item">{row.nameAr}</td>
-                    <td>{formatNumber(Number(row.onHand))}</td>
-                    <td>{formatNumber(Number(row.minQty))}</td>
+                    <td>{formatNumber(Number(row.onHand), lang)}</td>
+                    <td>{formatNumber(Number(row.minQty), lang)}</td>
                     <td>
                       {row.coverDays === null ? (
-                        <span className="field-hint">{t('reports.cover.none')}</span>
+                        <span className="field-hint">{t('reports.cover.none', lang)}</span>
                       ) : (
-                        <span>{formatNumber(Number(row.coverDays))}</span>
+                        <span>{formatNumber(Number(row.coverDays), lang)}</span>
                       )}
                       <span className="replenishment-rate">
-                        {t('reports.col.rate')}:{' '}
-                        {row.ratePerDay === null ? t('reports.rate.none') : formatNumber(Number(row.ratePerDay))}
+                        {t('reports.col.rate', lang)}:{' '}
+                        {row.ratePerDay === null ? t('reports.rate.none', lang) : formatNumber(Number(row.ratePerDay), lang)}
                       </span>
                     </td>
                   </tr>
@@ -72,7 +73,7 @@ export function ReplenishmentScreen({ groups, days, truncated, limit, branchLabe
 
       {truncated ? (
         <p className="field-hint" role="status">
-          {t('reports.truncated', { params: { count: formatNumber(limit) } })}
+          {t('reports.truncated', { lang, params: { count: formatNumber(limit, lang) } })}
         </p>
       ) : null}
     </div>

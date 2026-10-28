@@ -7,10 +7,14 @@ import { StockHistoryScreen } from '../../../components/StockHistoryScreen';
 import { getAppPool } from '../../../db/app-pool';
 import { withTenant } from '../../../db/client';
 import { t } from '../../../i18n';
+import { getRequestLang } from '../../../i18n/request';
 import { SIGN_IN_PATH } from '../../sign-in/contract';
 import { STOCK_REFUSAL_MESSAGE_KEYS, getVariantHistory } from '../handler';
 
-export const metadata = { title: t('stock.detail.heading') };
+export async function generateMetadata() {
+  const lang = await getRequestLang();
+  return { title: t('stock.detail.heading', lang) };
+}
 
 /**
  * ONE ITEM'S STORY — its balance per location and its full movement history.
@@ -18,16 +22,14 @@ export const metadata = { title: t('stock.detail.heading') };
  * The session is resolved by `getVariantHistory` inside ONE `withTenant`
  * boundary, and the SAME read decides whether this viewer may open this item at
  * all: a `branch_user` is refused a variant their branch does not hold, and the
- * refusal is the SAME code a missing id gets (so it is not an existence oracle
- * for the network's stock). `withTenant` is opened exactly once, here.
- *
- * Next 16 hands a dynamic route its params as a PROMISE, so they are awaited.
+ * refusal is the SAME code a missing id gets. Next 16 hands params as a PROMISE.
  */
 export default async function StockVariantPage({
   params,
 }: {
   params: Promise<{ variantId: string }>;
 }) {
+  const lang = await getRequestLang();
   const { variantId } = await params;
 
   const store = await cookies();
@@ -40,8 +42,8 @@ export default async function StockVariantPage({
   if (!detail.ok && detail.error === 'unauthenticated') redirect(SIGN_IN_PATH);
 
   return (
-    <main dir="rtl">
-      <h1>{t('stock.detail.heading')}</h1>
+    <main>
+      <h1>{t('stock.detail.heading', lang)}</h1>
       {detail.ok ? (
         <StockHistoryScreen
           sku={detail.sku}
@@ -52,10 +54,10 @@ export default async function StockVariantPage({
           branchLabel={detail.branchLabel}
         />
       ) : (
-        <p role="alert">{t(STOCK_REFUSAL_MESSAGE_KEYS[detail.error])}</p>
+        <p role="alert">{t(STOCK_REFUSAL_MESSAGE_KEYS[detail.error], lang)}</p>
       )}
       <p>
-        <a href="/stock">{t('stock.detail.back')}</a>
+        <a href="/stock">{t('stock.detail.back', lang)}</a>
       </p>
     </main>
   );

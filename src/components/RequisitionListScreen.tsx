@@ -7,30 +7,13 @@ import { requestLines } from '../app/requisitions/actions';
 import type { RequisitionRefusal } from '../domain/requisition-ui';
 import { REFUSAL_MESSAGE_KEYS } from '../domain/requisition-ui';
 import type { RequisitionStatus } from '../domain/requisition';
-import { formatDate, formatNumber, t } from '../i18n';
+import { formatDate, formatNumber, t, type Lang } from '../i18n';
 
 /**
  * THE REQUISITION LIST — what a branch user or the warehouse opens first.
  *
- * Two decisions shape it:
- *
- *   1. IT IS USED STANDING UP, ON A PHONE. One narrow column, generous tap
- *      targets, no desktop-only affordances, and NO local field styling — the
- *      shared rules in globals.css paint every input and button. The document is
- *      Arabic and RTL (dir is inherited from the root layout); the only LTR
- *      exception is a machine-read SKU, which keeps `.ltr-value`.
- *
- *   2. A DUPLICATE REQUEST IS GUARDED BY THE IN-FLIGHT FLAG, NOT BY A KEY. The
- *      form carries no idempotency key: `createRequisition` takes no id and the
- *      table has no place to store one, so a replayed form cannot be
- *      de-duplicated at the database. The submit button is therefore DISABLED
- *      until the action answers and cleared in a `finally`, and that guard is
- *      what stops a double tap — which is why it is not optional.
- *
- * Everything the system already knows is resolved SERVER-SIDE and never sent
- * from here: the branch the stock is for is the branch the session belongs to,
- * and `requested_by` is the session's user. Only what the person at the desk
- * knows — which items, and how many — is typed.
+ * `lang` is the request's resolved language, passed down from the server page,
+ * so every label, date and number follows the app's language and direction.
  */
 
 /** One option in the request form's item list, flattened for the client boundary. */
@@ -58,34 +41,29 @@ export interface RequisitionListScreenProps {
   /** The catalogue the request form may name. */
   variants: CatalogueOption[];
   requisitions: RequisitionListItem[];
+  /** The request's resolved language. */
+  lang: Lang;
 }
 
-/**
- * The translated label for a requisition state.
- *
- * A SWITCH of LITERAL keys on purpose: it keeps every status key visible to the
- * i18n guard that walks this file for translation-call literals, so a state
- * whose string was never added fails the suite instead of rendering its key on
- * screen.
- */
-export function statusLabel(status: RequisitionStatus): string {
+/** The translated label for a requisition state — a SWITCH of LITERAL keys. */
+export function statusLabel(status: RequisitionStatus, lang: Lang): string {
   switch (status) {
     case 'requested':
-      return t('requisitions.status.requested');
+      return t('requisitions.status.requested', lang);
     case 'approved':
-      return t('requisitions.status.approved');
+      return t('requisitions.status.approved', lang);
     case 'partially_issued':
-      return t('requisitions.status.partially_issued');
+      return t('requisitions.status.partially_issued', lang);
     case 'issued':
-      return t('requisitions.status.issued');
+      return t('requisitions.status.issued', lang);
     case 'received':
-      return t('requisitions.status.received');
+      return t('requisitions.status.received', lang);
     case 'closed':
-      return t('requisitions.status.closed');
+      return t('requisitions.status.closed', lang);
     case 'rejected':
-      return t('requisitions.status.rejected');
+      return t('requisitions.status.rejected', lang);
     case 'returned':
-      return t('requisitions.status.returned');
+      return t('requisitions.status.returned', lang);
   }
 }
 
@@ -94,6 +72,7 @@ export function RequisitionListScreen({
   branchLabel,
   variants,
   requisitions,
+  lang,
 }: RequisitionListScreenProps) {
   const router = useRouter();
 
@@ -110,7 +89,6 @@ export function RequisitionListScreen({
     parsed.every((line) => Number.isFinite(line.qtyNum) && line.qtyNum > 0) &&
     !busy;
 
-  /** Adds the picked item to the draft, or tops up the line already there. */
   function addLine() {
     const variant = variants.find((v) => v.id === pickedVariant);
     const qty = Number(pickedQty);
@@ -127,13 +105,6 @@ export function RequisitionListScreen({
     setPickedQty('1');
   }
 
-  /**
-   * Sends the request. The ONLY thing here that writes.
-   *
-   * The in-flight flag is cleared in `finally`, and the action ANSWERS with a
-   * coded outcome — a refusal reaches the desk as ITS OWN message, never as
-   * "you are not signed in".
-   */
   async function submit() {
     setProblem(null);
     setSent(false);
@@ -163,24 +134,22 @@ export function RequisitionListScreen({
   return (
     <div className="req">
       {requisitions.length === 0 ? (
-        <p className="field-hint">{t('requisitions.list.empty')}</p>
+        <p className="field-hint">{t('requisitions.list.empty', lang)}</p>
       ) : (
         <ul className="req-list">
           {requisitions.map((req) => (
             <li key={req.id} className="req-item">
               <a className="req-link" href={`/requisitions/${req.id}`}>
                 <span className="req-summary">
-                  {/* The branch, a right-to-left catalogue string in a flex
-                      item: allowed to shrink and to break (see globals.css). */}
                   <span className="req-branch-name">
                     {req.branchNameAr} ({req.branchCode})
                   </span>
-                  <span className="req-status">{statusLabel(req.status)}</span>
+                  <span className="req-status">{statusLabel(req.status, lang)}</span>
                 </span>
                 <span className="req-meta">
-                  {t('requisitions.list.lines', { params: { count: formatNumber(req.lineCount) } })}
+                  {t('requisitions.list.lines', { lang, params: { count: formatNumber(req.lineCount, lang) } })}
                   {' · '}
-                  {formatDate(new Date(req.requestedAt))}
+                  {formatDate(new Date(req.requestedAt), lang)}
                 </span>
               </a>
             </li>
@@ -190,18 +159,18 @@ export function RequisitionListScreen({
 
       {mayRequest ? (
         <section className="req-section">
-          <h2>{t('requisitions.new.heading')}</h2>
+          <h2>{t('requisitions.new.heading', lang)}</h2>
           {branchLabel ? (
-            <p className="req-meta">{t('requisitions.new.for', { params: { branch: branchLabel } })}</p>
+            <p className="req-meta">{t('requisitions.new.for', { lang, params: { branch: branchLabel } })}</p>
           ) : null}
 
           {variants.length === 0 ? (
             <p role="alert" className="req-problem">
-              {t('requisitions.new.no_variants')}
+              {t('requisitions.new.no_variants', lang)}
             </p>
           ) : (
             <>
-              <label htmlFor="req-variant">{t('requisitions.new.variant')}</label>
+              <label htmlFor="req-variant">{t('requisitions.new.variant', lang)}</label>
               <select
                 id="req-variant"
                 name="variant"
@@ -215,7 +184,7 @@ export function RequisitionListScreen({
                 ))}
               </select>
 
-              <label htmlFor="req-qty">{t('requisitions.new.qty')}</label>
+              <label htmlFor="req-qty">{t('requisitions.new.qty', lang)}</label>
               <input
                 id="req-qty"
                 name="qty"
@@ -228,11 +197,11 @@ export function RequisitionListScreen({
               />
 
               <button type="button" className="req-add" onClick={addLine} disabled={busy}>
-                {t('requisitions.new.add')}
+                {t('requisitions.new.add', lang)}
               </button>
 
               {draft.length === 0 ? (
-                <p className="field-hint">{t('requisitions.new.no_lines')}</p>
+                <p className="field-hint">{t('requisitions.new.no_lines', lang)}</p>
               ) : (
                 <ul className="req-lines">
                   {draft.map((line) => (
@@ -241,7 +210,7 @@ export function RequisitionListScreen({
                         <span className="req-line-name">{line.nameAr}</span>
                         <span className="ltr-value req-line-code">{line.sku}</span>
                         <span className="req-meta">
-                          {t('requisitions.line.requested')}: {formatNumber(Number(line.qty))}
+                          {t('requisitions.line.requested', lang)}: {formatNumber(Number(line.qty), lang)}
                         </span>
                       </div>
                       <button
@@ -249,7 +218,7 @@ export function RequisitionListScreen({
                         className="req-remove"
                         onClick={() => setDraft((prev) => prev.filter((row) => row.id !== line.id))}
                       >
-                        {t('requisitions.new.remove')}
+                        {t('requisitions.new.remove', lang)}
                       </button>
                     </li>
                   ))}
@@ -258,17 +227,17 @@ export function RequisitionListScreen({
 
               {problem ? (
                 <p role="alert" className="req-problem">
-                  {t(REFUSAL_MESSAGE_KEYS[problem])}
+                  {t(REFUSAL_MESSAGE_KEYS[problem], lang)}
                 </p>
               ) : null}
               {sent ? (
                 <p className="req-ok" aria-live="polite">
-                  {t('requisitions.ok.requested')}
+                  {t('requisitions.ok.requested', lang)}
                 </p>
               ) : null}
 
               <button type="button" className="req-primary" onClick={submit} disabled={busy}>
-                {busy ? t('requisitions.new.submitting') : t('requisitions.new.submit')}
+                {busy ? t('requisitions.new.submitting', lang) : t('requisitions.new.submit', lang)}
               </button>
             </>
           )}

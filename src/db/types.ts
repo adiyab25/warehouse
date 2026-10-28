@@ -43,6 +43,7 @@ export interface AppUser {
   created_at: Date;
   username: string;
   name_normalised: string;
+  preferred_lang: string | null;
 }
 
 export interface AppUserInsert {
@@ -56,6 +57,7 @@ export interface AppUserInsert {
   created_at?: Date;
   username: string;
   name_normalised: string;
+  preferred_lang?: string | null;
 }
 
 export interface CountLine {
