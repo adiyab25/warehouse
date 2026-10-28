@@ -208,6 +208,28 @@ export async function scrapLocation(db: Queryable): Promise<Location> {
 }
 
 /**
+ * Looks a location up by its primary key, scoped to the current tenant.
+ *
+ * The reader a label needs: a location label prints the name and code of one
+ * location, resolved from its id. Unlike the singleton lookups above it takes
+ * any location — a bin, a branch, a shelf — not a pseudo-location. `active` is
+ * required, so a label for a retired location behaves like one for a location
+ * that does not exist; an id the caller cannot see (another tenant's, or a
+ * missing one) is `null`. Call it with the scoped `db` from inside `withTenant`.
+ */
+export async function findLocationById(db: Queryable, id: string): Promise<Location | null> {
+  const { rows } = await db.query<Location>(
+    `select *
+       from locations
+      where id = $1
+        and active
+        and tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * Returns the tenant's warehouse location — the ONE source stock is issued FROM.
  *
  * A requisition names the BRANCH it is for, not the warehouse it draws from

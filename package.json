@@ -20,6 +20,7 @@
   "license": "ISC",
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.3",
+    "bwip-js": "^4.11.4",
     "next": "^16.4.3",
     "pg": "^8.23.1",
     "react": "^19.3.1",

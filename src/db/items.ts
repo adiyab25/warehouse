@@ -195,6 +195,42 @@ export async function findByBarcode(db: Queryable, code: string): Promise<ItemVa
 }
 
 /**
+ * Looks a variant up by its primary key, scoped to the current tenant, and
+ * returns the variant TOGETHER WITH the item's Arabic name.
+ *
+ * A label needs both halves at once — the item's Arabic name and the variant's
+ * SKU/barcode/attrs — so they come back from ONE query rather than two reads
+ * that a delete could slip between. `active` is required on BOTH the item and
+ * the variant, exactly as {@link findByBarcode} requires it: a label for a
+ * deactivated product must behave like a label for one that does not exist.
+ *
+ * A variant the caller cannot see — another tenant's, or a missing id — is
+ * `null`, never an error. Call it with the scoped `db` from inside `withTenant`.
+ */
+export async function findVariantById(
+  db: Queryable,
+  id: string,
+): Promise<{ variant: ItemVariant; itemNameAr: string } | null> {
+  const { rows } = await db.query<ItemVariant & { item_name_ar: string }>(
+    `select v.*, i.name_ar as item_name_ar
+       from item_variants v
+       join items i
+         on i.id = v.item_id
+        and i.tenant_id = v.tenant_id
+      where v.id = $1
+        and v.active
+        and i.active
+        and v.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+
+  const { item_name_ar: itemNameAr, ...variant } = row;
+  return { variant, itemNameAr };
+}
+
+/**
  * Sets (or updates) the min/max level for one (item, location) pair in the
  * current tenant.
  *
