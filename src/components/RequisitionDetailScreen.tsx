@@ -56,18 +56,7 @@ export interface RequisitionDetailScreenProps {
   actions: { canApprove: boolean; canIssue: boolean; canConfirm: boolean };
 }
 
-/** A uuid v4 for a form's key (with a hand-rolled fallback, as the intake door has). */
-function randomUuid(): string {
-  const c = globalThis.crypto;
-  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const value = Math.floor(Math.random() * 16);
-    return (ch === 'x' ? value : (value % 4) + 8).toString(16);
-  });
-}
-
-/**
- * The translated label for a requisition state — a SWITCH of LITERAL keys, so the
+/** The translated label for a requisition state — a SWITCH of LITERAL keys, so the
  * i18n guard that walks this file sees every status key it must have.
  */
 export function statusLabel(status: RequisitionStatus): string {
@@ -144,10 +133,6 @@ export function RequisitionDetailScreen({
 }: RequisitionDetailScreenProps) {
   const router = useRouter();
 
-  const [approveKey] = useState(randomUuid);
-  const [issueKey, setIssueKey] = useState(randomUuid);
-  const [confirmKey, setConfirmKey] = useState(randomUuid);
-
   const [approving, setApproving] = useState(false);
   const [issuing, setIssuing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -192,7 +177,7 @@ export function RequisitionDetailScreen({
     setLanded(null);
     setApproving(true);
     try {
-      const result = await approveRequisition({ key: approveKey, id });
+      const result = await approveRequisition({ id });
       if (!result.ok) {
         setProblem(result.error);
         return;
@@ -218,7 +203,6 @@ export function RequisitionDetailScreen({
     setIssuing(true);
     try {
       const result = await issueLines({
-        key: issueKey,
         id,
         lines: chosen.map(({ line, qty }) => ({ variantId: line.variantId, qty, from: line.issuedQty })),
       });
@@ -228,7 +212,6 @@ export function RequisitionDetailScreen({
       }
       const outstanding = lines.filter((line) => line.target - line.issuedQty > 0).length;
       setLanded(landedMessage(result.status ?? status, 'issue', outstanding));
-      setIssueKey(randomUuid());
       router.refresh();
     } catch {
       setProblem('invalid');
@@ -249,7 +232,6 @@ export function RequisitionDetailScreen({
     setConfirming(true);
     try {
       const result = await confirmLines({
-        key: confirmKey,
         id,
         lines: chosen.map(({ line, qty }) => ({ variantId: line.variantId, qty, from: line.receivedQty })),
       });
@@ -259,7 +241,6 @@ export function RequisitionDetailScreen({
       }
       const outstanding = lines.filter((line) => line.target - line.issuedQty > 0 || line.inTransit > 0).length;
       setLanded(landedMessage(result.status ?? status, 'confirm', outstanding));
-      setConfirmKey(randomUuid());
       router.refresh();
     } catch {
       setProblem('invalid');

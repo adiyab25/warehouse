@@ -105,3 +105,36 @@ test('the scanned product name has a width budget (shrinks and breaks)', () => {
     'the flex container must be allowed to shrink too, or the item cannot break',
   );
 });
+
+// WIDTH BUDGET for the requisition line cells (Task 14). Each is an unbroken
+// catalogue string — an Arabic name, a branch label, or a SKU — in a flex item on
+// a 390px phone. A flex item defaults to `min-width: auto` and refuses to shrink
+// below its longest token, so a pathologically long unbroken code overflows the
+// card (the review measured `.req-line-code` at 458px on a 390px viewport before
+// the fix). Every one of these cells must therefore be allowed to shrink
+// (`min-width: 0`) and to break (`overflow-wrap: anywhere`); the rendered proof
+// at 390px is in the report.
+test('the requisition line cells have a width budget (shrink and break)', () => {
+  for (const sel of ['.req-line-name', '.req-branch-name', '.req-line-code']) {
+    const rule = ruleFor(sel);
+    assert.ok(rule, `globals.css must define ${sel}`);
+    assert.match(
+      rule.body,
+      /min-width\s*:\s*0\b/,
+      `${sel} must be allowed to shrink below its longest word (min-width: 0)`,
+    );
+    assert.match(
+      rule.body,
+      /overflow-wrap\s*:\s*(anywhere|break-word)/,
+      `${sel} must be able to break a long unbroken token (overflow-wrap: anywhere)`,
+    );
+  }
+
+  const head = ruleFor('.req-line-head');
+  assert.ok(head, 'globals.css must define .req-line-head');
+  assert.match(
+    head.body,
+    /min-width\s*:\s*0\b/,
+    'the requisition flex container must be allowed to shrink too, or its cells cannot break',
+  );
+});

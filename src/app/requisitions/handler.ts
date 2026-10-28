@@ -298,14 +298,20 @@ export async function listRequisitions(
 
   let variants: CatalogueVariant[] = [];
   if (mayRequest) {
-    const { rows } = await db.query<CatalogueVariant>(
+    // The name is selected as `name_ar` (the COLUMN's name) and mapped to the
+    // camelCase `nameAr` the screen reads. It is NOT type-cast straight into a
+    // `CatalogueVariant`: Postgres returns the key `name_ar`, so a cast would
+    // compile while `variant.nameAr` stayed `undefined` and the request form
+    // rendered a blank name beside every SKU. The mapping is explicit, exactly
+    // as the requisition rows below are mapped.
+    const { rows } = await db.query<{ id: string; sku: string; name_ar: string }>(
       `select v.id, v.sku, i.name_ar
          from item_variants v
          join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
         where v.tenant_id = ${TENANT} and v.active and i.active
         order by v.sku`,
     );
-    variants = rows;
+    variants = rows.map((row) => ({ id: row.id, sku: row.sku, nameAr: row.name_ar }));
   }
 
   return {
@@ -497,20 +503,31 @@ export async function getRequisition(
 // The four writes.
 // ---------------------------------------------------------------------------
 
-/** The request form as the screen submits it. */
+/**
+ * The request form as the screen submits it.
+ *
+ * THERE IS NO `key` FIELD. There used to be a screen-minted `key`, REQUIRED and
+ * validated but never used for anything: `createRequisition` takes no id and the
+ * `requisitions` table has no idempotency column, so a replayed form CANNOT be
+ * de-duplicated at the database. A required key that guards nothing gave a FALSE
+ * impression of idempotency (Task 14's review), so it is gone. A double-tapped
+ * "send request" is therefore guarded ONLY by the screen's in-flight state (the
+ * submit button is disabled until the action answers and cleared in a `finally`);
+ * that guard is not optional, and this note is why.
+ */
 export interface RequestForm {
-  /**
-   * The screen-minted key for this form. Carried so a form can be recognised,
-   * and REQUIRED — a write with no key is a bug, not a shortcut.
-   */
-  key: string;
   lines: Array<{ variantId: string; requestedQty: number }>;
   notes?: string;
 }
 
-/** The approve form as the screen submits it. */
+/**
+ * The approve form as the screen submits it.
+ *
+ * No `key`: approving is guarded by the STATE MACHINE, not by a form token — a
+ * second approve of the same document is refused as `wrong_state`, so a
+ * screen-minted key would have guarded nothing.
+ */
 export interface ApproveForm {
-  key: string;
   id: string;
   /** Per-line agreed quantities; omitted ⇒ release exactly what was asked. */
   lines?: Array<{ variantId: string; approvedQty: number }>;
@@ -522,26 +539,30 @@ export interface FlowLine {
   qty: number;
   /**
    * The quantity the CALLER HELD when it rendered the form — `issued_qty` for
-   * an issue, `received_qty` for a confirm. It anchors the intent: the ledger
-   * key this leg will use is derived from `from + qty`, so a retry of the same
-   * intent collides with the movement the first attempt wrote.
+   * an issue, `received_qty` for a confirm. It is RECONCILED server-side against
+   * the stored state (see {@link classifyFlowLine}): a retry of the same intent
+   * (`from + qty` equal to the stored quantity) is recognised as a replay,
+   * while a stale or forged `from` is refused.
    */
   from: number;
 }
 
-/** An issue or confirm form. */
+/**
+ * An issue or confirm form.
+ *
+ * No `key`: idempotency here is the LEDGER ANCHOR, not a form token. The key the
+ * write actually posts under is derived from `id`, the variant and `from + qty`,
+ * so a screen-minted key would have been a validated-but-unused parallel to a
+ * mechanism that already works.
+ */
 export interface FlowForm {
-  key: string;
   id: string;
   lines: FlowLine[];
 }
 
-/** Requires a non-empty key and a well-formed line list, or refuses as `invalid`. */
+/** Requires a well-formed line list, or refuses as `invalid`. */
 function requireFlowForm(form: FlowForm, fn: string): void {
-  if (!form || typeof form.key !== 'string' || form.key.trim() === '') {
-    throw new RequisitionError('invalid', `${fn}: the form carries no key — reload the screen and try again.`);
-  }
-  if (typeof form.id !== 'string' || form.id.trim() === '') {
+  if (!form || typeof form.id !== 'string' || form.id.trim() === '') {
     throw new RequisitionError('invalid', `${fn}: no requisition id was supplied.`);
   }
   if (!Array.isArray(form.lines) || form.lines.length === 0) {
@@ -617,6 +638,43 @@ async function movementExists(db: Queryable, key: string): Promise<boolean> {
 }
 
 /**
+ * How ONE line of an issue/confirm form reconciles with the STORED ledger state.
+ *
+ * The caller hands in the quantity it acted FROM (`from`), which the server
+ * cannot trust. It is therefore not trusted: it is RECONCILED against the
+ * quantity the server holds right now.
+ *
+ *   * `fresh`  — `from` IS the stored quantity: nothing has posted for this line
+ *     since the form rendered, so this is a genuine new leg. It proceeds to the
+ *     state/quantity guard and the write.
+ *   * `replay` — the cumulative this leg would produce (`from + qty`) IS the
+ *     stored quantity, AND its movement is in the ledger: this exact leg has
+ *     already posted, so the intent is answered, not re-posted. (A lost response
+ *     or a double tap produces exactly this.)
+ *   * `stale`  — `from` reconciles with neither: a forged or outdated starting
+ *     point (e.g. the document advanced under the form). Refused as
+ *     `wrong_state`, so a call that changes nothing CANNOT report `ok`.
+ *
+ * A forged `from` cannot defeat the double-tap guard either: an invented `from`
+ * lands outside these two cases and is refused rather than being allowed to
+ * compute a fresh cumulative and post a second movement.
+ */
+async function classifyFlowLine(
+  db: Queryable,
+  id: string,
+  line: FlowLine,
+  storedQty: number,
+  movementKey: (variantId: string, after: number) => string,
+): Promise<'fresh' | 'replay' | 'stale'> {
+  if (round3(line.from) === round3(storedQty)) return 'fresh';
+  const after = round3(line.from + line.qty);
+  if (round3(after) === round3(storedQty) && (await movementExists(db, movementKey(line.variantId, after)))) {
+    return 'replay';
+  }
+  return 'stale';
+}
+
+/**
  * Creates a requisition for the CALLER'S OWN branch.
  *
  * The branch is resolved from the session (`app_users.branch_location_id`), so a
@@ -636,10 +694,7 @@ export async function requestIn(
 ): Promise<{ requisitionId: string }> {
   const { user, branchLocationId } = await requireBranch(db, cookie);
 
-  if (!form || typeof form.key !== 'string' || form.key.trim() === '') {
-    throw new RequisitionError('invalid', 'requestIn: the form carries no key — reload the screen and try again.');
-  }
-  if (!Array.isArray(form.lines) || form.lines.length === 0) {
+  if (!Array.isArray(form?.lines) || form.lines.length === 0) {
     throw new RequisitionError('invalid', 'requestIn: a requisition needs at least one line.');
   }
   for (const line of form.lines) {
@@ -677,10 +732,7 @@ export async function approveIn(
   form: ApproveForm,
 ): Promise<{ status: RequisitionStatus }> {
   const user = await requireWarehouse(db, cookie);
-  if (!form || typeof form.key !== 'string' || form.key.trim() === '') {
-    throw new RequisitionError('invalid', 'approveIn: the form carries no key — reload the screen and try again.');
-  }
-  if (typeof form.id !== 'string' || form.id.trim() === '') {
+  if (typeof form?.id !== 'string' || form.id.trim() === '') {
     throw new RequisitionError('invalid', 'approveIn: no requisition id was supplied.');
   }
 
@@ -700,15 +752,23 @@ export async function approveIn(
  * Issues stock against an approved (or partly-issued) requisition: warehouse ->
  * transit, through Task 7's `issue`.
  *
- * IDEMPOTENT ON THE INTENT. Each line's ledger key is derived from the CALLER'S
- * `from` plus the quantity ({@link issueAnchor}); if that movement already
- * exists, this exact leg has posted and the call ANSWERS instead of re-posting —
- * which is what makes a double tap land on ONE movement even though a second
- * partial leg would otherwise compute a new cumulative quantity.
+ * IDEMPOTENT ON THE INTENT, BUT THE INTENT IS VERIFIED. Each line's ledger key
+ * is the cumulative it would produce (`from + qty`, {@link issueAnchor}); a retry
+ * of ONE leg therefore lands on the same movement. The caller's `from`, however,
+ * is NOT trusted blindly: {@link classifyFlowLine} reconciles it with the stored
+ * state FIRST, so
+ *
+ *   * a genuine new leg (`from` == stored) runs the state/quantity guard and
+ *     writes;
+ *   * a retry (`from + qty` == stored, movement present) is answered, not
+ *     re-posted — a double tap lands on ONE movement;
+ *   * a stale or forged `from` (the document advanced, or a made-up starting
+ *     point) is refused as `wrong_state` — it is NOT answered with the current
+ *     status as a silent success, and it CANNOT be used to compute a fresh
+ *     cumulative and post a second movement.
  *
  * A QUANTITY THAT WOULD EXCEED THE TARGET IS REFUSED BEFORE ANY WRITE, as
- * `wrong_state`, so a change of mind under an old key is refused rather than
- * answered with the old row as success.
+ * `wrong_state`.
  */
 export async function issueIn(
   db: Queryable,
@@ -718,23 +778,30 @@ export async function issueIn(
   await requireWarehouse(db, cookie);
   requireFlowForm(form, 'issueIn');
 
-  // Take the header lock FIRST, so the replay check and the write are one
+  // Take the header lock FIRST, so the reconciliation and the write are one
   // critical section: a concurrent second caller waits here, then sees the
   // movement the first one wrote and replays instead of issuing again.
   const requisition = await lockRequisition(db, form.id, 'issueIn');
 
-  let allPosted = true;
-  for (const line of form.lines) {
-    const anchor = issueAnchor(form.id, line.variantId, round3(line.from + line.qty));
-    if (!(await movementExists(db, anchor))) allPosted = false;
-  }
-  if (allPosted) return { status: requisition.status };
-
+  let allReplay = true;
+  let anyReplay = false;
   for (const line of form.lines) {
     const stored = await readLineState(db, form.id, line.variantId);
     if (!stored) {
       throw new RequisitionError('invalid', `issueIn: variant ${line.variantId} is not a line on requisition ${form.id}.`);
     }
+    const kind = await classifyFlowLine(db, form.id, line, stored.issuedQty, (v, a) => issueAnchor(form.id, v, a));
+    if (kind === 'stale') {
+      throw new RequisitionError(
+        'wrong_state',
+        `issueIn: line ${line.variantId} on requisition ${form.id} — the state the form acted from (issued ${line.from}) no longer matches the stored issued ${stored.issuedQty}; reload the screen and try again.`,
+      );
+    }
+    if (kind === 'replay') {
+      anyReplay = true;
+      continue;
+    }
+    allReplay = false;
     const target = stored.approvedQty ?? stored.requestedQty;
     const problem = issueProblem(requisition.status, { target, issued: stored.issuedQty }, line.qty);
     if (problem) {
@@ -743,6 +810,17 @@ export async function issueIn(
         `issueIn: line ${line.variantId} on requisition ${form.id} — cannot issue ${line.qty} from '${requisition.status}' (issued ${stored.issuedQty} of ${target}).`,
       );
     }
+  }
+
+  // Every line already posted: this intent has landed — answer, do not re-post.
+  if (allReplay) return { status: requisition.status };
+  // A form is written as ONE transaction, so it is all-fresh or all-replay;
+  // anything else is not a real state and must not half-apply.
+  if (anyReplay) {
+    throw new RequisitionError(
+      'wrong_state',
+      `issueIn: requisition ${form.id} — some lines of this form have already posted and others have not; reload the screen and try again.`,
+    );
   }
 
   const result = await issue(
@@ -764,9 +842,11 @@ export async function issueIn(
  * limited to `issued - received`, which is what lets the desk acknowledge what
  * has arrived while the rest is still on the road.
  *
- * IDEMPOTENT ON THE INTENT, exactly as {@link issueIn}: the ledger key is
- * derived from the caller's `from` plus the quantity, so a retry of one confirm
- * leg lands on the movement it already wrote.
+ * IDEMPOTENT ON THE INTENT, exactly as {@link issueIn}, AND THE INTENT IS
+ * VERIFIED the same way: the caller's `from` (its `received_qty`) is reconciled
+ * with the stored `received_qty` by {@link classifyFlowLine}, so a retry of one
+ * confirm leg is answered while a stale or forged `from` is refused as
+ * `wrong_state` rather than answered with the current status as a silent success.
  */
 export async function confirmIn(
   db: Queryable,
@@ -784,18 +864,31 @@ export async function confirmIn(
     );
   }
 
-  let allPosted = true;
-  for (const line of form.lines) {
-    const anchor = confirmAnchor(form.id, line.variantId, round3(line.from + line.qty));
-    if (!(await movementExists(db, anchor))) allPosted = false;
-  }
-  if (allPosted) return { status: requisition.status };
-
+  let allReplay = true;
+  let anyReplay = false;
   for (const line of form.lines) {
     const stored = await readLineState(db, form.id, line.variantId);
     if (!stored) {
       throw new RequisitionError('invalid', `confirmIn: variant ${line.variantId} is not a line on requisition ${form.id}.`);
     }
+    const kind = await classifyFlowLine(
+      db,
+      form.id,
+      line,
+      stored.receivedQty,
+      (v, a) => confirmAnchor(form.id, v, a),
+    );
+    if (kind === 'stale') {
+      throw new RequisitionError(
+        'wrong_state',
+        `confirmIn: line ${line.variantId} on requisition ${form.id} — the state the form acted from (received ${line.from}) no longer matches the stored received ${stored.receivedQty}; reload the screen and try again.`,
+      );
+    }
+    if (kind === 'replay') {
+      anyReplay = true;
+      continue;
+    }
+    allReplay = false;
     const problem = confirmProblem(
       requisition.status,
       { issued: stored.issuedQty, received: stored.receivedQty },
@@ -807,6 +900,15 @@ export async function confirmIn(
         `confirmIn: line ${line.variantId} on requisition ${form.id} — cannot receive ${line.qty} from '${requisition.status}' (issued ${stored.issuedQty}, already received ${stored.receivedQty}).`,
       );
     }
+  }
+
+  // Every line already posted: this intent has landed — answer, do not re-post.
+  if (allReplay) return { status: requisition.status };
+  if (anyReplay) {
+    throw new RequisitionError(
+      'wrong_state',
+      `confirmIn: requisition ${form.id} — some lines of this form have already posted and others have not; reload the screen and try again.`,
+    );
   }
 
   const result = await confirmReceipt(

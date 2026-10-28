@@ -354,8 +354,16 @@ p[role="alert"] {
   margin-block: 0.75rem;
 }
 
+/* The machine-read code, left-to-right (`.ltr-value`). WIDTH BUDGET: a SKU is an
+ * UNBROKEN catalogue string, so a flex item's default `min-width: auto` refuses
+ * to shrink below it and a pathologically long code (no spaces, no hyphens to
+ * break on) runs off the card and pushes the quantity fields off a 390px phone.
+ * Same treatment as `.req-line-name` and `.req-branch-name`: allowed to shrink
+ * (`min-width: 0`) and to BREAK (`overflow-wrap: anywhere`). */
 .req-line-code {
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .req-lines {

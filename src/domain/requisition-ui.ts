@@ -1,4 +1,8 @@
 import { canConfirm, type RequisitionStatus } from './requisition.ts';
+import { issueKey, receiveKey, round3 } from './requisition-keys.ts';
+
+// Re-export the ONE rounding rule so the screen and the ledger round identically.
+export { round3 };
 
 /**
  * The requisition SCREENS' rules — pure functions, no database and no Next.
@@ -119,14 +123,26 @@ export function availableActions(
 }
 
 /**
- * Rounds to the 3 decimals `numeric(12, 3)` stores — the same rounding Task 7
- * applies before it builds a per-leg ledger key. Duplicated deliberately and
- * kept byte-identical: the anchor this module derives must equal the
- * `idempotency_key` the write actually stores, or the replay check is useless.
- * (A test asserts the two agree on a real movement.)
+ * The ledger key Task 7's ISSUE leg posts its movement under.
+ *
+ * `requisition:<id>:issue:<variantId>:<issuedQtyAfter>` — now built by the ONE
+ * implementation in `src/domain/requisition-keys.ts`, imported by BOTH this
+ * module and `src/db/requisitions.ts`, so the anchor the screen derives can
+ * never drift from the `idempotency_key` the write actually stores (which is
+ * what makes a double tap land on ONE movement). A thin wrapper so the
+ * screen-side name and its existing callers/tests stay stable.
  */
-export function round3(value: number): number {
-  return Math.round(value * 1000) / 1000;
+export function issueAnchor(requisitionId: string, variantId: string, issuedQtyAfter: number): string {
+  return issueKey(requisitionId, variantId, issuedQtyAfter);
+}
+
+/**
+ * The ledger key Task 7's CONFIRM leg posts its movement under —
+ * `requisition:<id>:recv:<variantId>:<receivedQtyAfter>`, built by the SAME ONE
+ * implementation as {@link issueAnchor}, for the same reason.
+ */
+export function confirmAnchor(requisitionId: string, variantId: string, receivedQtyAfter: number): string {
+  return receiveKey(requisitionId, variantId, receivedQtyAfter);
 }
 
 /** What a line holds for the issue guard: how much was agreed, and how much left. */
@@ -195,27 +211,4 @@ export function confirmProblem(
   if (inTransit <= 0) return 'wrong_state';
   if (qty > inTransit) return 'wrong_state';
   return null;
-}
-
-/**
- * The ledger key Task 7's ISSUE leg posts its movement under.
- *
- * `requisition:<id>:issue:<variantId>:<issuedQtyAfter>` — byte-identical to
- * `issueKey` in `src/db/requisitions.ts`. The screen derives it to answer "did
- * this exact leg already post?", which is what makes a double tap land on ONE
- * movement: a retry of the same intent produces the SAME key, and a genuine
- * second leg (a different cumulative quantity) produces a different one.
- */
-export function issueAnchor(requisitionId: string, variantId: string, issuedQtyAfter: number): string {
-  return `requisition:${requisitionId}:issue:${variantId}:${round3(issuedQtyAfter)}`;
-}
-
-/**
- * The ledger key Task 7's CONFIRM leg posts its movement under —
- * `requisition:<id>:recv:<variantId>:<receivedQtyAfter>`, byte-identical to
- * `receiveKey` in `src/db/requisitions.ts`, for the same reason as
- * {@link issueAnchor}.
- */
-export function confirmAnchor(requisitionId: string, variantId: string, receivedQtyAfter: number): string {
-  return `requisition:${requisitionId}:recv:${variantId}:${round3(receivedQtyAfter)}`;
 }

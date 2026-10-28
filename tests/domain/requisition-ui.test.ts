@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { Client } from 'pg';
@@ -20,12 +22,13 @@ import type { RequisitionStatus } from '../../src/domain/requisition.ts';
 import {
   REFUSAL_MESSAGE_KEYS,
   availableActions,
+  confirmAnchor,
   confirmProblem,
   issueAnchor,
   type RequisitionRefusal,
 } from '../../src/domain/requisition-ui.ts';
 import { hasKey } from '../../src/i18n/index.ts';
-import { migrateUrl, sqlTestUrl, withDb } from '../harness/sql.ts';
+import { REPO_ROOT, migrateUrl, sqlTestUrl, withDb } from '../harness/sql.ts';
 
 /**
  * The REQUISITION SCREENS' rules and their server-side seams (Task 14).
@@ -302,10 +305,10 @@ test('a branch user sees only their own branch requisitions', { skip: !sqlTestUr
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const mineA = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 3 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 3 }] }),
     );
     const mineB = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieB, { key: 'req-b', lines: [{ variantId: f.variant1, requestedQty: 7 }] }),
+      requestIn(tdb, cookieB, { lines: [{ variantId: f.variant1, requestedQty: 7 }] }),
     );
 
     const seenByA = await withTenant(db, f.tenant, (tdb) => listRequisitions(tdb, cookieA));
@@ -337,11 +340,11 @@ test('a branch user cannot approve', { skip: !sqlTestUrl() }, async () => {
   await withDb(async (db) => {
     const cookieA = await mintCookie(db, f.tenant, f.branchUserA);
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 3 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 3 }] }),
     );
 
     const refused = await withTenant(db, f.tenant, (tdb) =>
-      answered(() => approveIn(tdb, cookieA, { key: 'app-1', id: requisitionId })),
+      answered(() => approveIn(tdb, cookieA, { id: requisitionId })),
     );
     assert.equal(refused.ok, false, 'a branch user must not be able to approve');
     assert.equal(
@@ -366,15 +369,15 @@ test('confirming beyond the issued quantity returns the wrong_state error key', 
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 5 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 5 }] }),
     );
-    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { key: 'app', id: requisitionId }));
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
     await withTenant(db, f.tenant, (tdb) =>
-      issueIn(tdb, cookieManager, { key: 'iss', id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
     );
 
     const refused = await withTenant(db, f.tenant, (tdb) =>
-      answered(() => confirmIn(tdb, cookieA, { key: 'con', id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] })),
+      answered(() => confirmIn(tdb, cookieA, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] })),
     );
     assert.equal(refused.ok, false, 'confirming 6 against an issued 5 must be refused');
     assert.equal(
@@ -403,16 +406,16 @@ test('issuing posts stock to transit, and a double submit posts exactly one move
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 20 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 20 }] }),
     );
-    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { key: 'app', id: requisitionId }));
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
 
     // A PARTIAL leg: 5 of 20. Its remainder (15) leaves room for a SECOND tap to
     // be a legal issue on its own — so the anchor, and nothing else, is what
     // stops the ledger being written twice.
     const leg = { variantId: f.variant1, qty: 5, from: 0 };
     const first = await withTenant(db, f.tenant, (tdb) =>
-      answered(() => issueIn(tdb, cookieManager, { key: 'iss-1', id: requisitionId, lines: [leg] })),
+      answered(() => issueIn(tdb, cookieManager, { id: requisitionId, lines: [leg] })),
     );
     assert.equal(first.ok, true);
     assert.equal((first as { status: RequisitionStatus }).status, 'partially_issued');
@@ -420,7 +423,7 @@ test('issuing posts stock to transit, and a double submit posts exactly one move
     // THE DOUBLE TAP: the same intent, re-submitted (same key, same content —
     // exactly what a lost response or a second tap produces).
     const second = await withTenant(db, f.tenant, (tdb) =>
-      answered(() => issueIn(tdb, cookieManager, { key: 'iss-1', id: requisitionId, lines: [leg] })),
+      answered(() => issueIn(tdb, cookieManager, { id: requisitionId, lines: [leg] })),
     );
     assert.equal(second.ok, true, 'a retry of the same leg is answered, not refused');
 
@@ -451,7 +454,6 @@ test('issuing posts stock to transit, and a double submit posts exactly one move
     const changed = await withTenant(db, f.tenant, (tdb) =>
       answered(() =>
         issueIn(tdb, cookieManager, {
-          key: 'iss-1',
           id: requisitionId,
           lines: [{ variantId: f.variant1, qty: 999, from: 0 }],
         }),
@@ -477,16 +479,16 @@ test('a partially_issued requisition is continuable from the seam the screen dri
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 10 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 10 }] }),
     );
-    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { key: 'app', id: requisitionId }));
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
 
     // Partial issue of 6, confirmed for what arrived: the document stays open.
     await withTenant(db, f.tenant, (tdb) =>
-      issueIn(tdb, cookieManager, { key: 'iss-1', id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] }),
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] }),
     );
     const confirmed = await withTenant(db, f.tenant, (tdb) =>
-      confirmIn(tdb, cookieA, { key: 'con-1', id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] }),
+      confirmIn(tdb, cookieA, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 6, from: 0 }] }),
     );
     assert.equal((confirmed as { status: RequisitionStatus }).status, 'partially_issued', 'more is still to come');
 
@@ -498,13 +500,13 @@ test('a partially_issued requisition is continuable from the seam the screen dri
 
     // Release the remaining 4 (a SECOND leg, from the state the form rendered).
     const rest = await withTenant(db, f.tenant, (tdb) =>
-      issueIn(tdb, cookieManager, { key: 'iss-2', id: requisitionId, lines: [{ variantId: f.variant1, qty: 4, from: 6 }] }),
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 4, from: 6 }] }),
     );
     assert.equal((rest as { status: RequisitionStatus }).status, 'issued');
 
     // ...and confirm the remaining 4. The branch ends up holding the whole 10.
     const done = await withTenant(db, f.tenant, (tdb) =>
-      confirmIn(tdb, cookieA, { key: 'con-2', id: requisitionId, lines: [{ variantId: f.variant1, qty: 4, from: 6 }] }),
+      confirmIn(tdb, cookieA, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 4, from: 6 }] }),
     );
     assert.equal((done as { status: RequisitionStatus }).status, 'received');
 
@@ -530,17 +532,225 @@ test('a branch user cannot confirm another branch’s requisition', { skip: !sql
     const cookieManager = await mintCookie(db, f.tenant, f.manager);
 
     const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
-      requestIn(tdb, cookieA, { key: 'req-a', lines: [{ variantId: f.variant1, requestedQty: 5 }] }),
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 5 }] }),
     );
-    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { key: 'app', id: requisitionId }));
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
     await withTenant(db, f.tenant, (tdb) =>
-      issueIn(tdb, cookieManager, { key: 'iss', id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
     );
 
     const refused = await withTenant(db, f.tenant, (tdb) =>
-      answered(() => confirmIn(tdb, cookieB, { key: 'con', id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] })),
+      answered(() => confirmIn(tdb, cookieB, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] })),
     );
     assert.equal(refused.ok, false, 'another branch must not confirm this document');
     assert.equal((refused as { ok: false; error: string }).error, 'forbidden');
   });
+});
+
+// ---------------------------------------------------------------------------
+// (3) The CATALOGUE the request form offers — the Arabic NAME must survive.
+// ---------------------------------------------------------------------------
+
+/**
+ * The defect this guards (Task 14's review FAIL): `listRequisitions` selected the
+ * column `i.name_ar` but cast the row straight into a `CatalogueVariant`
+ * (`{id, sku, nameAr}`). Postgres returns the key `name_ar`, so `variant.nameAr`
+ * was `undefined` and the request form rendered "\u2014 AB-0012" — a blank name
+ * beside every SKU. A test asserting only `rows.length > 0` passed; THIS one
+ * asserts the FIELD itself, and its value against what the database holds.
+ */
+test('the catalogue the request form offers carries a non-empty Arabic name for every row', { skip: !sqlTestUrl() }, async () => {
+  const f = await provision();
+
+  await withDb(async (db) => {
+    const cookieA = await mintCookie(db, f.tenant, f.branchUserA);
+    const list = await withTenant(db, f.tenant, (tdb) => listRequisitions(tdb, cookieA));
+
+    assert.equal(list.variants.length, 2, 'both catalogue variants are offered to a branch user');
+    for (const variant of list.variants) {
+      assert.equal(
+        typeof variant.nameAr,
+        'string',
+        `variant ${variant.sku} must carry a string nameAr, not undefined`,
+      );
+      assert.notEqual(
+        variant.nameAr.trim(),
+        '',
+        `variant ${variant.sku} must carry its Arabic item name — an empty name IS the shipped defect`,
+      );
+    }
+
+    // ...and the name the screen renders MATCHES what the database holds.
+    let storedName = '';
+    await withTenant(db, f.tenant, async (tdb) => {
+      const { rows } = await tdb.query<{ name_ar: string }>(
+        `select i.name_ar
+           from item_variants v
+           join items i on i.id = v.item_id and i.tenant_id = v.tenant_id
+          where v.id = $1`,
+        [f.variant1],
+      );
+      storedName = rows[0]!.name_ar;
+    });
+    const known = list.variants.find((v) => v.id === f.variant1);
+    assert.ok(known, 'the AB-0012 variant is in the catalogue');
+    assert.equal(known.nameAr, storedName, 'the name the screen renders must be the name the database holds');
+    assert.equal(known.nameAr, 'قميص', 'AB-0012 is the shirt the fixture created');
+  });
+});
+
+/**
+ * The CONFIRM-side sibling of the double-tap anchor assertion. The review noted
+ * only the ISSUE anchor (`issueAnchor`) was pinned to the stored ledger key; the
+ * CONFIRM key is derived by the same screen-side code, so it is pinned too.
+ */
+test('the confirm anchor the screen holds matches the ledger key the write used', { skip: !sqlTestUrl() }, async () => {
+  const f = await provision();
+
+  await withDb(async (db) => {
+    const cookieA = await mintCookie(db, f.tenant, f.branchUserA);
+    const cookieManager = await mintCookie(db, f.tenant, f.manager);
+
+    const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 5 }] }),
+    );
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
+    await withTenant(db, f.tenant, (tdb) =>
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+    );
+    await withTenant(db, f.tenant, (tdb) =>
+      confirmIn(tdb, cookieA, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+    );
+
+    await withTenant(db, f.tenant, async (tdb) => {
+      const { rows } = await tdb.query<{ idempotency_key: string | null }>(
+        `select idempotency_key
+           from stock_movements
+          where tenant_id = $1 and ref_type = 'REQUISITION' and ref_id = $2
+            and idempotency_key like '%:recv:%'`,
+        [f.tenant, requisitionId],
+      );
+      assert.equal(rows.length, 1, 'exactly one confirm movement was posted');
+      assert.equal(
+        rows[0]!.idempotency_key,
+        confirmAnchor(requisitionId, f.variant1, 5),
+        'the confirm anchor the screen holds matches the ledger key the write actually used',
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (4) A caller-supplied `from` is NOT trusted — it is reconciled server-side.
+// ---------------------------------------------------------------------------
+
+test('a stale from is refused as the wrong state, never answered as a silent success', { skip: !sqlTestUrl() }, async () => {
+  const f = await provision();
+
+  await withDb(async (db) => {
+    const cookieA = await mintCookie(db, f.tenant, f.branchUserA);
+    const cookieManager = await mintCookie(db, f.tenant, f.manager);
+
+    const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 20 }] }),
+    );
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
+
+    // Two legs: the document advances to issued 10.
+    await withTenant(db, f.tenant, (tdb) =>
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+    );
+    await withTenant(db, f.tenant, (tdb) =>
+      issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 5 }] }),
+    );
+
+    // A STALE retry of leg one (from=0, qty=5): its anchor — cumulative 5 — still
+    // exists in the ledger, but the document has advanced to issued 10. The OLD
+    // short-circuit answered this with the CURRENT STATUS as `ok` even though it
+    // changed nothing; it must instead be refused as the wrong state.
+    const stale = await withTenant(db, f.tenant, (tdb) =>
+      answered(() =>
+        issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 0 }] }),
+      ),
+    );
+    assert.equal(stale.ok, false, 'a stale from must be refused, not answered as ok');
+    assert.equal((stale as { ok: false; error: string }).error, 'wrong_state');
+
+    await withTenant(db, f.tenant, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        `select count(*)::int as n from stock_movements
+          where tenant_id = $1 and ref_type = 'REQUISITION' and ref_id = $2`,
+        [f.tenant, requisitionId],
+      );
+      assert.equal(rows[0]!.n, 2, 'the refused stale call wrote no movement — the ledger still holds the two real legs');
+    });
+  });
+});
+
+test('a from that is too large is refused and posts nothing', { skip: !sqlTestUrl() }, async () => {
+  const f = await provision();
+
+  await withDb(async (db) => {
+    const cookieA = await mintCookie(db, f.tenant, f.branchUserA);
+    const cookieManager = await mintCookie(db, f.tenant, f.manager);
+
+    const { requisitionId } = await withTenant(db, f.tenant, (tdb) =>
+      requestIn(tdb, cookieA, { lines: [{ variantId: f.variant1, requestedQty: 20 }] }),
+    );
+    await withTenant(db, f.tenant, (tdb) => approveIn(tdb, cookieManager, { id: requisitionId }));
+
+    // from=100 claims 100 already issued against a 20-line target — a fabricated
+    // starting point. Its anchor (cumulative 105) does not exist, so the OLD code
+    // sailed past the replay check and posted a fresh leg; the reconciliation
+    // refuses it as the wrong state and nothing is written.
+    const bogus = await withTenant(db, f.tenant, (tdb) =>
+      answered(() =>
+        issueIn(tdb, cookieManager, { id: requisitionId, lines: [{ variantId: f.variant1, qty: 5, from: 100 }] }),
+      ),
+    );
+    assert.equal(bogus.ok, false, 'a fabricated from must be refused');
+    assert.equal((bogus as { ok: false; error: string }).error, 'wrong_state');
+
+    await withTenant(db, f.tenant, async (tdb) => {
+      const { rows } = await tdb.query<{ n: number }>(
+        `select count(*)::int as n from stock_movements
+          where tenant_id = $1 and ref_type = 'REQUISITION' and ref_id = $2`,
+        [f.tenant, requisitionId],
+      );
+      assert.equal(rows[0]!.n, 0, 'the refused call posted nothing');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (5) The ledger key format has ONE implementation, in a dependency-free module.
+// ---------------------------------------------------------------------------
+
+test('the ledger key format lives in ONE dependency-free module', () => {
+  const modulePath = join(REPO_ROOT, 'src', 'domain', 'requisition-keys.ts');
+  const source = readFileSync(modulePath, 'utf8');
+
+  const imports = source.match(/^\s*import\b[^\n]*/gm) ?? [];
+  assert.deepEqual(
+    imports,
+    [],
+    'src/domain/requisition-keys.ts must import NOTHING: it is pulled into two `use client` components, and a `pg`/db import would drag the database driver into the client bundle',
+  );
+  assert.equal(
+    /\brequire\s*\(/.test(source),
+    false,
+    'the module must not `require()` either — no database driver may reach the client bundle through it',
+  );
+  assert.equal(
+    /from\s+['"][^'"]*\bpg\b/.test(source),
+    false,
+    'the module must not reference `pg`',
+  );
+
+  // Both the ledger and the screen layer import the ONE implementation, so the
+  // two can no longer drift apart (the drift that posted a second movement).
+  const ledger = readFileSync(join(REPO_ROOT, 'src', 'db', 'requisitions.ts'), 'utf8');
+  const screenLayer = readFileSync(join(REPO_ROOT, 'src', 'domain', 'requisition-ui.ts'), 'utf8');
+  assert.match(ledger, /from '\.\.\/domain\/requisition-keys\.ts'/, 'the ledger imports the key builders');
+  assert.match(screenLayer, /from '\.\/requisition-keys\.ts'/, 'the screen layer imports the key builders');
 });

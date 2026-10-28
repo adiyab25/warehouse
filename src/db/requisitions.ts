@@ -1,4 +1,5 @@
 import { allowedTransitions, canConfirm, type RequisitionStatus } from '../domain/requisition.ts';
+import { issueKey, receiveKey, round3 } from '../domain/requisition-keys.ts';
 import type { Queryable } from './client.ts';
 import { transitLocation, warehouseLocation } from './locations.ts';
 import { postMovement, lockStockPair } from './movements.ts';
@@ -67,19 +68,6 @@ function requirePositiveQty(value: unknown, field: string, context: string): num
     );
   }
   return value;
-}
-
-/**
- * Rounds a quantity to the 3 decimals `numeric(12, 3)` stores.
- *
- * Quantities are read back from Postgres as JS numbers, and cumulative legs are
- * summed in JS; without this a decimal chain (0.1 + 0.2) would drift to
- * 0.30000000000000004 and, worse, a per-leg idempotency key built from it would
- * never match on retry. Every cumulative quantity and derived remainder passes
- * through here, so a key is byte-identical between the first post and a retry.
- */
-function round3(value: number): number {
-  return Math.round(value * 1000) / 1000;
 }
 
 /**
@@ -543,16 +531,6 @@ export async function close(
   const closed = rows[0];
   if (!closed) throw new Error(`close: requisition ${id} disappeared while being closed`);
   return closed;
-}
-
-/** The stable per-leg idempotency key the ISSUE leg posts its movement under. */
-function issueKey(requisitionId: string, variantId: string, issuedQtyAfter: number): string {
-  return `requisition:${requisitionId}:issue:${variantId}:${issuedQtyAfter}`;
-}
-
-/** The stable per-leg idempotency key the CONFIRM leg posts its movement under. */
-function receiveKey(requisitionId: string, variantId: string, receivedQtyAfter: number): string {
-  return `requisition:${requisitionId}:recv:${variantId}:${receivedQtyAfter}`;
 }
 
 /**

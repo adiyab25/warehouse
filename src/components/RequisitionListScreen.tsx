@@ -20,9 +20,12 @@ import { formatDate, formatNumber, t } from '../i18n';
  *      Arabic and RTL (dir is inherited from the root layout); the only LTR
  *      exception is a machine-read SKU, which keeps `.ltr-value`.
  *
- *   2. THE FORM'S KEY IS MINTED WHEN THE FORM OPENS and carried on the submit,
- *      so a form can be recognised across a retry; the in-flight flag is cleared
- *      in a `finally`, so a failure can never leave the button disabled.
+ *   2. A DUPLICATE REQUEST IS GUARDED BY THE IN-FLIGHT FLAG, NOT BY A KEY. The
+ *      form carries no idempotency key: `createRequisition` takes no id and the
+ *      table has no place to store one, so a replayed form cannot be
+ *      de-duplicated at the database. The submit button is therefore DISABLED
+ *      until the action answers and cleared in a `finally`, and that guard is
+ *      what stops a double tap — which is why it is not optional.
  *
  * Everything the system already knows is resolved SERVER-SIDE and never sent
  * from here: the branch the stock is for is the branch the session belongs to,
@@ -55,16 +58,6 @@ export interface RequisitionListScreenProps {
   /** The catalogue the request form may name. */
   variants: CatalogueOption[];
   requisitions: RequisitionListItem[];
-}
-
-/** A uuid v4 for the form's key (with a hand-rolled fallback, as the intake door has). */
-function randomUuid(): string {
-  const c = globalThis.crypto;
-  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const value = Math.floor(Math.random() * 16);
-    return (ch === 'x' ? value : (value % 4) + 8).toString(16);
-  });
 }
 
 /**
@@ -104,8 +97,6 @@ export function RequisitionListScreen({
 }: RequisitionListScreenProps) {
   const router = useRouter();
 
-  // Minted ONCE, when the form opens; kept across a retry.
-  const [formKey, setFormKey] = useState(randomUuid);
   const [pickedVariant, setPickedVariant] = useState(variants[0]?.id ?? '');
   const [pickedQty, setPickedQty] = useState('1');
   const [draft, setDraft] = useState<Array<{ id: string; sku: string; nameAr: string; qty: string }>>([]);
@@ -153,7 +144,6 @@ export function RequisitionListScreen({
     setBusy(true);
     try {
       const result = await requestLines({
-        key: formKey,
         lines: parsed.map((line) => ({ variantId: line.id, requestedQty: line.qtyNum })),
       });
       if (!result.ok) {
@@ -162,8 +152,6 @@ export function RequisitionListScreen({
       }
       setSent(true);
       setDraft([]);
-      // A genuinely new form: a new key, so the next request is its own document.
-      setFormKey(randomUuid());
       router.refresh();
     } catch {
       setProblem('invalid');
