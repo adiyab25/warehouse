@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/*
+ * Direction — the ONE place the RTL/LTR rule lives.
+ *
+ * The document is Arabic-first and RIGHT-TO-LEFT: the root layout sets
+ * `<html lang="ar" dir="rtl">`, so every element inherits RTL unless it opts
+ * out. Barcode / SKU entry (and any field holding a machine-read value) must
+ * stay LEFT-TO-RIGHT — a scanner emits a Latin code, and rendering it RTL would
+ * show it reversed. Rather than re-deriving direction per screen, Tasks 12-16
+ * (labels and screens) apply this class to such a field:
+ *
+ *     <input class="ltr-value" … />
+ *
+ * `unicode-bidi: plaintext` keeps the caret and any mixed content sane even
+ * when the surrounding paragraph is RTL.
+ */
+.ltr-value {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/* A readable default: the shell is a plain, legible document on both
+ * directions, with Arabic text starting from the right edge. */
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Naskh Arabic", sans-serif;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+label {
+  display: block;
+  margin-block: 0.75rem;
+}
+
+input {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}

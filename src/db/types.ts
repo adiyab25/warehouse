@@ -194,6 +194,22 @@ export interface LocationInsert {
   created_at?: Date;
 }
 
+export interface LoginAttempt {
+  id: string;
+  tenant_id: string;
+  identifier: string;
+  succeeded: boolean;
+  attempted_at: Date;
+}
+
+export interface LoginAttemptInsert {
+  id?: string;
+  tenant_id: string;
+  identifier: string;
+  succeeded: boolean;
+  attempted_at?: Date;
+}
+
 export interface ReceiptLine {
   id: string;
   tenant_id: string;
@@ -396,6 +412,7 @@ export interface Database {
   items: Item;
   location_levels: LocationLevel;
   locations: Location;
+  login_attempts: LoginAttempt;
   receipt_lines: ReceiptLine;
   receipts: Receipt;
   requisition_lines: RequisitionLine;
@@ -410,7 +427,7 @@ export interface Database {
 export type TableName = keyof Database;
 
 /** Every generated table name, in catalogue order. */
-export const tableNames = ['api_clients', 'app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'sessions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
+export const tableNames = ['api_clients', 'app_users', 'count_lines', 'count_sessions', 'item_variants', 'items', 'location_levels', 'locations', 'login_attempts', 'receipt_lines', 'receipts', 'requisition_lines', 'requisitions', 'sessions', 'stock_movements', 'stock_snapshots', 'tenants'] as const;
 
 /** Foreign keys discovered in the catalogue. */
 export const foreignKeys = [
@@ -432,6 +449,7 @@ export const foreignKeys = [
   { table: 'location_levels', columns: 'tenant_id,location_id', definition: "FOREIGN KEY (tenant_id, location_id) REFERENCES locations(tenant_id, id)" },
   { table: 'locations', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'locations', columns: 'tenant_id,parent_id', definition: "FOREIGN KEY (tenant_id, parent_id) REFERENCES locations(tenant_id, id)" },
+  { table: 'login_attempts', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'receipt_lines', columns: 'tenant_id', definition: "FOREIGN KEY (tenant_id) REFERENCES tenants(id)" },
   { table: 'receipt_lines', columns: 'tenant_id,receipt_id', definition: "FOREIGN KEY (tenant_id, receipt_id) REFERENCES receipts(tenant_id, id) ON DELETE CASCADE" },
   { table: 'receipt_lines', columns: 'tenant_id,variant_id', definition: "FOREIGN KEY (tenant_id, variant_id) REFERENCES item_variants(tenant_id, id)" },

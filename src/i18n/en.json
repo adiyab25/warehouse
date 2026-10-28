@@ -1,0 +1,13 @@
+{
+  "app.title": "Warehouse",
+  "app.description": "The inventory backbone — one warehouse feeding fourteen branches.",
+  "home.title": "Home",
+  "home.tagline": "Movements are the truth; on-hand is derived from them.",
+  "sign_in.title": "Sign in",
+  "sign_in.username": "Name",
+  "sign_in.password": "Password",
+  "sign_in.submit": "Sign in",
+  "sign_in.error.invalid": "The name or password is incorrect.",
+  "sign_in.error.locked": "Sign-in is temporarily paused after repeated failed attempts. Try again later.",
+  "common.ltr_hint": "Codes and barcodes are written left to right."
+}

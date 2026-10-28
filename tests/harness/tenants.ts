@@ -64,6 +64,7 @@ export async function cleanupTenants(): Promise<void> {
   const owner = new Client({ connectionString: migrateUrl()! });
   await owner.connect();
   try {
+    await owner.query('delete from login_attempts where tenant_id = any($1)', [created]);
     await owner.query('delete from sessions where tenant_id = any($1)', [created]);
     await owner.query('delete from api_clients where tenant_id = any($1)', [created]);
     await owner.query('delete from app_users where tenant_id = any($1)', [created]);
