@@ -16,15 +16,18 @@ export type Queryable = {
 
 /**
  * Resolves the connection string for {@link newPool}. An explicit `url` wins;
- * otherwise `DATABASE_URL` (which, in production, is the *non-owner* role the
- * app runs as — a superuser would bypass RLS), then `SQL_TEST_DATABASE_URL`.
+ * otherwise `APP_DATABASE_URL` — the app's OWN variable, the non-owner role the
+ * app serves as. It deliberately does NOT fall back to `DATABASE_URL` /
+ * `MIGRATE_DATABASE_URL`: those are the migration OWNER role, and a table owner
+ * (or any superuser / `BYPASSRLS` role) bypasses RLS, so a fallback to it would
+ * silently serve the app with every tenant protection switched off. Callers that
+ * need another role (tests, the migration runner) pass an explicit `url`.
  */
 function resolveUrl(url?: string): string {
-  const resolved =
-    url ?? process.env.DATABASE_URL ?? process.env.SQL_TEST_DATABASE_URL;
+  const resolved = url ?? process.env.APP_DATABASE_URL;
   if (!resolved) {
     throw new Error(
-      'newPool: no connection string — pass a url or set DATABASE_URL or SQL_TEST_DATABASE_URL',
+      'newPool: no connection string — pass a url or set APP_DATABASE_URL',
     );
   }
   return resolved;

@@ -21,12 +21,37 @@
   unicode-bidi: plaintext;
 }
 
+/*
+ * SHARED FORM CONTROLS — the ONE place a field's look is defined.
+ *
+ * Tailwind's preflight zeroes every border and makes controls transparent, so
+ * without these rules an <input> is INVISIBLE: a label and floating text with no
+ * box to type into. Every later screen (Tasks 13-16) inherits this instead of
+ * inventing its own field styling, so the fix lives here ONCE.
+ *
+ * Deliberately NEUTRAL — no brand direction has been chosen yet: a system font
+ * stack (with an Arabic face), one accent colour and nothing else. Restyle by
+ * changing the custom properties below. (Dark mode is skipped on purpose: the
+ * owner has not chosen a direction; a `prefers-color-scheme` block can be added
+ * here later without touching any screen.)
+ */
+:root {
+  --surface: #ffffff;
+  --field-surface: #ffffff;
+  --text: #1b1b1b;
+  --field-border: #8a8a8a;
+  --accent: #1a5fb4; /* the ONE accent colour */
+  --danger-text: #b3261e;
+}
+
 /* A readable default: the shell is a plain, legible document on both
  * directions, with Arabic text starting from the right edge. */
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", "Noto Naskh Arabic", sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Naskh Arabic", "Noto Sans Arabic", sans-serif;
   line-height: 1.6;
+  color: var(--text);
+  background-color: var(--surface);
 }
 
 main {
@@ -38,18 +63,58 @@ main {
 label {
   display: block;
   margin-block: 0.75rem;
+  font-weight: 500;
 }
 
-input {
+/*
+ * A VISIBLE field: a background, a border, comfortable padding and a 44px
+ * minimum height (a generous tap target on a phone). `box-sizing` keeps the
+ * full-width control inside the column.
+ */
+input,
+select,
+textarea {
   display: block;
   width: 100%;
-  padding: 0.4rem 0.6rem;
-  font: inherit;
   box-sizing: border-box;
+  min-height: 2.75rem; /* 44px — a comfortable tap target */
+  padding: 0.6rem 0.75rem;
+  font: inherit;
+  color: var(--text);
+  background-color: var(--field-surface);
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
 }
 
-button {
+/* A focus ring so a keyboard user can always see which field is active. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+/* A clearly button-like button: filled with the one accent, 44px tall. */
+button,
+input[type="submit"] {
   font: inherit;
-  padding: 0.5rem 1rem;
+  min-height: 2.75rem; /* 44px — a comfortable tap target */
+  padding: 0.6rem 1.1rem;
   cursor: pointer;
+  color: #ffffff;
+  background-color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+}
+
+button:focus-visible,
+input[type="submit"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A failed sign-in reads as a problem, not as body copy. */
+p[role="alert"] {
+  color: var(--danger-text);
 }

@@ -33,7 +33,7 @@ export async function signInAction(formData: FormData): Promise<void> {
   const username = String(formData.get(USERNAME_FIELD) ?? '');
   const password = String(formData.get('password') ?? '');
 
-  const result = await withTenant(getAppPool(), configuredTenantId(), (db) =>
+  const result = await withTenant(await getAppPool(), configuredTenantId(), (db) =>
     signIn(db, { username, password }),
   );
 

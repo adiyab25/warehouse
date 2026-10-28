@@ -94,5 +94,5 @@ export async function loadCurrentUser(): Promise<CurrentUser | null> {
   const { withTenant } = await import('../db/client.ts');
   const { configuredTenantId } = await import('./tenant.ts');
 
-  return withTenant(getAppPool(), configuredTenantId(), (db) => currentUser(db, value));
+  return withTenant(await getAppPool(), configuredTenantId(), (db) => currentUser(db, value));
 }

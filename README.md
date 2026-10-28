@@ -53,14 +53,26 @@ echo "grant usage, create on schema public, auth, extensions to authenticated;
   | /c/Workspace/pg/pgsql/bin/psql.exe
 ```
 
-Copy `.env.example` to `.env`. Migrations run as `MIGRATE_DATABASE_URL` (falling
-back to `DATABASE_URL`) — the database OWNER; the tests connect as
-`SQL_TEST_DATABASE_URL` — the non-superuser `authenticated` role. They are
-deliberately different roles. `scripts/migrate.mjs` reads the owner url first and
-**refuses to run** if it connects as `authenticated`: whoever creates a table
-owns it, and a table owner bypasses its own RLS, so migrating as the app role
-would leave every table owned by `authenticated` and silently defeat row-level
-security.
+Copy `.env.example` to `.env`. There are **three** database urls, each with a
+distinct job, and they are deliberately different roles:
+
+- `MIGRATE_DATABASE_URL` (falling back to `DATABASE_URL`) — the database **OWNER**
+  the migration runner connects as.
+- `APP_DATABASE_URL` — the non-superuser `authenticated` role the **running app**
+  serves as. The app reads **only** this variable (there is no fallback to the
+  owner variable, which is exactly how a deployment would end up silently served
+  with RLS off) and **refuses to serve** if the connected role is a superuser or
+  has `rolbypassrls` — see `src/db/app-pool.ts`.
+- `SQL_TEST_DATABASE_URL` — the non-superuser `authenticated` role every **test**
+  connects as.
+
+`scripts/migrate.mjs` reads the owner url first and **refuses to run** if it
+connects as `authenticated`: whoever creates a table owns it, and a table owner
+bypasses its own RLS, so migrating as the app role would leave every table owned
+by `authenticated` and silently defeat row-level security. The app-side check is
+the inverse: it refuses to *serve* as the owner (or any superuser / `BYPASSRLS`
+role), because serving as a bypassing role would silently switch off every tenant
+protection while every test still passed.
 
 ### Running
 
