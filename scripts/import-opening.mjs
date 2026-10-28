@@ -15,7 +15,7 @@ import { basename } from 'node:path';
 
 import { appDatabaseUrl } from '../src/db/app-pool.ts';
 import { newPool } from '../src/db/client.ts';
-import { MAX_BYTES, formatSummary, runOpeningImport } from '../src/import/opening.ts';
+import { MAX_BYTES, escapeUnsafe, formatSummary, runOpeningImport } from '../src/import/opening.ts';
 
 const USAGE =
   'usage: npm run import:opening -- --tenant <uuid> --user <username> --file <path.csv> [--apply]\n' +
@@ -32,7 +32,7 @@ function parseArgs(argv) {
     else if (k === '--user') out.user = take();
     else if (k === '--file') out.file = take();
     else if (k === '--help' || k === '-h') out.help = true;
-    else throw new Error(`unknown option ${k}`);
+    else throw new Error(`unknown option ${escapeUnsafe(String(k)).slice(0, 80)}`);
   }
   return out;
 }
@@ -77,7 +77,7 @@ try {
   code = result.ok ? 0 : 1;
 } catch (err) {
   // Message only: never print the connection string.
-  console.error(`import refused: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`import refused: ${escapeUnsafe(err instanceof Error ? err.message : String(err))}`);
   code = 1;
 } finally {
   await pool?.end().catch(() => {});

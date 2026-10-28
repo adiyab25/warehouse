@@ -7,8 +7,9 @@ import { after, test } from 'node:test';
 import { Client, Pool } from 'pg';
 
 import { withTenant } from '../../src/db/client.ts';
+import * as OP from '../../src/import/opening.ts';
 import { createLocation } from '../../src/db/locations.ts';
-import { postMovement } from '../../src/db/movements.ts';
+import { lockStockPair, postMovement } from '../../src/db/movements.ts';
 import { createItem } from '../../src/db/items.ts';
 import {
   COLUMNS,
@@ -537,7 +538,7 @@ test('awkward decimals are stored EXACTLY; whole numbers only for discrete items
   });
   const frac = await run(fx, csv('WHL-0001,صنف,consumable,unit,1,1.00,MAIN,2.5'), { apply: true });
   assert.equal(frac.ok, false);
-  assert.match(msgs(frac), /not a whole number .* counted in whole units/);
+  assert.match(msgs(frac), /is counted in whole units, so qty 2.5 is not allowed/);
 });
 
 // ---------------------------------------------------------------------------
@@ -763,4 +764,348 @@ test('the CLI: usage errors exit 2, dry-run exits 0 and writes nothing, owner ur
   assert.equal(asOwner.code, 1);
   assert.match(asOwner.out, /refusing to serve as role/);
   assert.doesNotMatch(asOwner.out, /postgresql:\/\//);
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes: the optional `discrete` column, safe text, pinned guards
+// ---------------------------------------------------------------------------
+
+const HEADER9 = `${HEADER},discrete`;
+const csv9 = (...rows: string[]): string => [HEADER9, ...rows].join('\n') + '\n';
+const one = (uom: string, discrete?: string): ReturnType<typeof parseOpeningCsv> =>
+  parseOpeningCsv(Buffer.from(discrete === undefined ? csv(`K-1,x,consumable,${uom},1,1,MAIN,1`) : csv9(`K-1,x,consumable,${uom},1,1,MAIN,1,${discrete}`)));
+const stored = async (tenant: string, sku: string): Promise<boolean> =>
+  owner(async (c) => (await c.query('select i.discrete from items i join item_variants v on v.item_id = i.id where v.tenant_id = $1 and v.sku = $2', [tenant, sku])).rows[0].discrete);
+
+test('discrete is DERIVED from the unit when the column is absent or blank (every listed unit, odd spellings)', () => {
+  const measured = ['kg', 'g', 'gram', 'l', 'litre', 'liter', 'ml', 'm', 'metre', 'meter', 'cm', 'mm', 'ton', 'tonne', 'yard', 'yd', 'كيلو', 'كجم', 'جرام', 'جم', 'لتر', 'متر', 'سم', 'طن', 'ياردة'];
+  assert.ok(measured.length >= 25);
+  for (const u of measured) {
+    for (const spelled of [u, ` ${u} `, u.toUpperCase(), `${u}.`, `${u}\u00a0`]) {
+      for (const withCol of [false, true]) {
+        const p = one(spelled, withCol ? '' : undefined);
+        assert.deepEqual(p.errors, [], `${spelled}`);
+        assert.equal(p.rows[0]!.discrete, false, `uom ${JSON.stringify(spelled)} must be fractional`);
+        assert.equal(p.rows[0]!.discreteSource, 'derived');
+      }
+    }
+  }
+  for (const u of ['unit', 'قطعة', 'box', 'ream', 'pcs', 'علبة', 'kgs', 'meters2']) {
+    const p = one(u);
+    assert.equal(p.rows[0]!.discrete, true, u);
+    assert.equal(p.rows[0]!.discreteSource, 'derived');
+  }
+});
+
+test('discrete column: yes/no/true/false/1/0 (any case, trimmed, Latin only); anything else is a line-numbered error', () => {
+  for (const [v, want] of [['yes', true], ['NO', false], [' True ', true], ['false', false], ['1', true], ['0', false]] as const) {
+    const p = one('kg', v);
+    assert.deepEqual(p.errors, [], v);
+    assert.equal(p.rows[0]!.discrete, want, v);
+    assert.equal(p.rows[0]!.discreteSource, 'given', v);
+  }
+  for (const bad of ['maybe', 'y', 'نعم', '١', '٠', '2', 'yes please']) {
+    const p = one('kg', bad);
+    assert.equal(p.rows.length, 0, bad);
+    assert.equal(p.errors[0]!.line, 2, bad);
+    assert.match(p.errors[0]!.message, /discrete .* yes, no, true, false, 1, 0/, bad);
+  }
+});
+
+test('explicit discrete=no lets a counted-unit item take 12.5; explicit yes makes kg 12.5 an error with the fix', async () => {
+  const fx = await fixture();
+  const ok = await run(fx, csv9('FAB-0001,قماش,consumable,قطعة,1,10.00,MAIN,12.5,no'), { apply: true });
+  assert.equal(ok.ok, true, msgs(ok));
+  assert.equal(await stored(fx.tenant, 'FAB-0001'), false);
+  assert.equal((await movements(fx.tenant))[0]!.qty, '12.500');
+  const no = await run(fx, csv9('RIC-0009,أرز,consumable,kg,1,1.00,MAIN,12.5,yes'));
+  assert.equal(no.ok, false);
+  assert.match(msgs(no), /item RIC-0009 is counted in whole units, so qty 12\.5 is not allowed\. If it can be fractional \(metres, kilos\), put no in the discrete column and import again; if it is whole, fix the qty\./);
+});
+
+test('Arabic metre with the column blank: derived fractional, shown in the plan, stored discrete=false', async () => {
+  const fx = await fixture();
+  const row = 'FAB-0002,قماش قطني,consumable,متر,1,10.00,MAIN,12.5';
+  const dry = await run(fx, csv9(`${row},`));
+  assert.equal(dry.ok, true, msgs(dry));
+  assert.ok(dry.plan.some((l) => /create item FAB-0002 .*may be fractional \(derived\)/.test(l)), dry.plan.join('|'));
+  assert.match(formatSummary(dry, false), /may be fractional \(derived\)/);
+  const given = await run(fx, csv9('FAB-0003,قماش,consumable,قطعة,1,10.00,MAIN,12,yes'));
+  assert.ok(given.plan.some((l) => /create item FAB-0003 .*counted in whole units \(given\)/.test(l)), given.plan.join('|'));
+  assert.ok(given.plan.every((l) => /whole units|fractional/.test(l)), 'EVERY plan line carries the flag');
+  const real = await run(fx, csv(row), { apply: true });
+  assert.equal(real.ok, true, msgs(real));
+  assert.equal(await stored(fx.tenant, 'FAB-0002'), false);
+  const fx2 = await fixture();
+  const yes = await run(fx2, csv9(`${row},yes`));
+  assert.equal(yes.ok, false);
+  assert.match(msgs(yes), /put no in the discrete column/);
+});
+
+test('a KNOWN item: a given discrete that differs from the stored flag is an error (both shown); blank or equal is fine', async () => {
+  const fx = await fixture();
+  await withTenant(POOL, fx.tenant, (db) =>
+    createItem(db, { sku: 'KD-0001', barcode: 'KD-0001', nameAr: 'كرسي', family: 'asset', uom: 'unit', packFactor: 1, costEgp: 1, discrete: true }),
+  );
+  const row = (d: string): string => csv9(`KD-0001,كرسي,asset,unit,1,1.00,MAIN,3,${d}`);
+  const bad = await run(fx, row('no'));
+  assert.equal(bad.ok, false);
+  assert.match(msgs(bad), /item KD-0001 already exists but discrete differs: CSV has "no", the item has "yes"/);
+  assert.equal(bad.errors[0]!.line, 2);
+  for (const d of ['', 'yes', 'TRUE']) assert.equal((await run(fx, row(d))).ok, true, d);
+  assert.equal((await run(fx, csv('KD-0001,كرسي,asset,unit,1,1.00,MAIN,3'))).ok, true, 'no column: no comparison');
+});
+
+test('a CSV WITHOUT the discrete column works unchanged (the sample file still imports)', async () => {
+  const fx = await fixture();
+  assert.equal(readFileSync(SAMPLE, 'utf8').split('\n')[0]!.trim(), HEADER);
+  const r = await run(fx, readFileSync(SAMPLE), { apply: true });
+  assert.equal(r.ok, true, msgs(r));
+  assert.equal(r.movementsToPost, 5);
+});
+
+test('safeText: control + bidi characters become \\uXXXX, long text is capped at 60 + …', () => {
+  assert.equal(OP.safeText('ab\u001b[31mc'), 'ab\\u001b[31mc');
+  assert.equal(OP.safeText('\u001b]0;x\u0007'), '\\u001b]0;x\\u0007');
+  assert.equal(OP.safeText('a\u202eb\u2066c\u2069'), 'a\\u202eb\\u2066c\\u2069');
+  assert.equal(OP.safeText('a\u0000b\u007fc\u009bd'), 'a\\u0000b\\u007fc\\u009bd');
+  assert.equal(OP.safeText('قلم أزرق A4'), 'قلم أزرق A4');
+  assert.equal(OP.safeText('x'.repeat(60)), 'x'.repeat(60));
+  assert.equal(OP.safeText('x'.repeat(61)), `${'x'.repeat(60)}…`);
+});
+
+// eslint-disable-next-line no-control-regex
+const RAW_CTRL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+const flat = (r: ImportResult, apply = true): string => formatSummary(r, apply).replace(/\n/g, ' ');
+
+test('hidden bidi / zero-width characters in name_ar, sku, uom, location_code are rejected with a line number', async () => {
+  const fx = await fixture();
+  const before = await snap(fx.tenant);
+  for (const ch of ['\u202e', '\u202a', '\u2066', '\u2069', '\u200b', '\u200f', '\u2060', '\ufeff']) {
+    const cells: Record<string, string> = {
+      name_ar: `قلم${ch}أزرق`,
+      sku: `PEN${ch}-0001`,
+      uom: `un${ch}it`,
+      location_code: `MA${ch}IN`,
+    };
+    for (const [field, val] of Object.entries(cells)) {
+      const o = { sku: 'PEN-0001', name_ar: 'قلم', uom: 'unit', location_code: 'MAIN', [field]: val };
+      const r = await run(fx, csv(`${o.sku},${o.name_ar},consumable,${o.uom},1,1,${o.location_code},1`), { apply: true });
+      assert.equal(r.ok, false, `${field} ${JSON.stringify(ch)}`);
+      assert.equal(r.errors[0]!.line, 2);
+      assert.ok(r.errors.some((e) => new RegExp(`${field}.*(hidden|invisible)`).test(e.message)), `${field} ${JSON.stringify(ch)}: ${msgs(r)}`);
+      for (const e of r.errors) assert.doesNotMatch(e.message, RAW_CTRL, 'no raw hidden char is echoed');
+      assert.doesNotMatch(flat(r), RAW_CTRL);
+    }
+  }
+  assert.equal(await snap(fx.tenant), before);
+});
+
+test('ESC / OSC / NUL in any cell, the user, the tenant and the file name: clean error, nothing raw echoed, no 500', async () => {
+  const fx = await fixture();
+  const good = 'PEN-0001,قلم,consumable,unit,1,1,MAIN,1';
+  for (const ev of ['\u001b[2J', '\u001b]0;x\u0007', 'a\u0000b', 'a\u202eb']) {
+    const rowsBad = [
+      `PEN-0001${ev},قلم,consumable,unit,1,1,MAIN,1`,
+      `PEN-0001,قلم${ev},consumable,unit,1,1,MAIN,1`,
+      `PEN-0001,قلم,consumable${ev},unit,1,1,MAIN,1`,
+      `PEN-0001,قلم,consumable,unit${ev},1,1,MAIN,1`,
+      `PEN-0001,قلم,consumable,unit,1${ev},1,MAIN,1`,
+      `PEN-0001,قلم,consumable,unit,1,1${ev},MAIN,1`,
+      `PEN-0001,قلم,consumable,unit,1,1,MAIN${ev},1`,
+      `PEN-0001,قلم,consumable,unit,1,1,MAIN,1${ev}`,
+      `PEN-0001,قلم,consumable,unit,1,1,MAIN,1,maybe${ev}`,
+    ];
+    for (const row of rowsBad) {
+      const r = await run(fx, csv9(row), { apply: true });
+      assert.equal(r.ok, false, JSON.stringify(row));
+      assert.equal(r.errors[0]!.line, 2);
+      for (const e of r.errors) assert.doesNotMatch(e.message, RAW_CTRL, JSON.stringify(e.message));
+      assert.doesNotMatch(flat(r), RAW_CTRL);
+    }
+    const u = await run(fx, csv(good), { user: `wm${ev}` });
+    assert.equal(u.ok, false);
+    const t = await run(fx, csv(good), { tenant: `${fx.tenant}${ev}` });
+    assert.equal(t.ok, false);
+    for (const r of [u, t]) assert.doesNotMatch(flat(r), RAW_CTRL);
+    const f = await run(fx, csv(good), { name: `x${ev}.csv`, apply: true });
+    assert.equal(f.ok, true, msgs(f));
+    assert.doesNotMatch(flat(f), RAW_CTRL);
+    assert.doesNotMatch((await movements(fx.tenant))[0]!.notes!, RAW_CTRL, 'the movement note is safe text too');
+    await owner(async (c) => {
+      await c.query('set session_replication_role = replica');
+      await c.query('delete from stock_movements where tenant_id = $1', [fx.tenant]);
+      await c.query('delete from item_variants where tenant_id = $1', [fx.tenant]);
+      await c.query('delete from items where tenant_id = $1', [fx.tenant]);
+    });
+  }
+});
+
+test('a DEACTIVATED item is refused by name on a re-run', async () => {
+  const fx = await fixture();
+  assert.equal((await run(fx, csv('DEA-0001,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true })).ok, true);
+  await owner((c) => c.query('update items set active = false where tenant_id = $1', [fx.tenant]));
+  const r = await run(fx, csv('DEA-0001,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true });
+  assert.equal(r.ok, false);
+  assert.match(msgs(r), /item DEA-0001 is deactivated/);
+  await owner((c) => c.query('update items set active = true where tenant_id = $1', [fx.tenant]));
+  await owner((c) => c.query('update item_variants set active = false where tenant_id = $1', [fx.tenant]));
+  assert.match(msgs(await run(fx, csv('DEA-0001,صنف,consumable,unit,1,1.00,MAIN,5'))), /item DEA-0001 is deactivated/);
+});
+
+async function existingItem(fx: Fx, sku: string): Promise<string> {
+  const { variant } = await withTenant(POOL, fx.tenant, (db) =>
+    createItem(db, { sku, barcode: sku, nameAr: 'صنف', family: 'consumable', uom: 'unit', packFactor: 1, costEgp: 1 }),
+  );
+  return variant.id;
+}
+
+/** Holds the stock-pair lock (and optionally posts a movement) in another transaction until `release()`. */
+async function holdPair(fx: Fx, vid: string, withReceipt: boolean): Promise<{ release: () => Promise<void> }> {
+  const holder = new Client({ connectionString: sqlTestUrl()! });
+  await holder.connect();
+  let free!: () => void;
+  const gate = new Promise<void>((r) => (free = r));
+  let locked!: () => void;
+  const got = new Promise<void>((r) => (locked = r));
+  const h = withTenant(holder, fx.tenant, async (db) => {
+    await lockStockPair(db, vid, fx.loc.MAIN!);
+    if (withReceipt) await postMovement(db, { variantId: vid, qty: 3, reason: 'receipt', toLocationId: fx.loc.MAIN!, actorUserId: fx.userId });
+    locked();
+    await gate;
+  });
+  await got;
+  return {
+    release: async () => {
+      free();
+      await h;
+      await holder.end();
+    },
+  };
+}
+
+test("an existing item's row WAITS for the stock-pair lock held by another transaction, then proceeds", async () => {
+  const fx = await fixture();
+  const vid = await existingItem(fx, 'LCK-0001');
+  const hold = await holdPair(fx, vid, false);
+  try {
+    let done = false;
+    const p = run(fx, csv('LCK-0001,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true }).then((r) => ((done = true), r));
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(done, false, 'must wait for the pair lock');
+    await hold.release();
+    const r = await p;
+    assert.equal(r.ok, true, msgs(r));
+    assert.equal((await movements(fx.tenant)).length, 1);
+  } finally {
+    await hold.release().catch(() => {});
+  }
+});
+
+test('movements that appear between preflight and apply fail the WHOLE file; nothing is written', async () => {
+  const fx = await fixture();
+  const vid = await existingItem(fx, 'RAC-0001');
+  const hold = await holdPair(fx, vid, true);
+  try {
+    let done = false;
+    const p = run(fx, csv('NEW-0001,جديد,consumable,unit,1,1.00,MAIN,9', 'RAC-0001,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true }).then((r) => ((done = true), r));
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(done, false);
+    await hold.release();
+    const r = await p;
+    assert.equal(r.ok, false);
+    assert.match(msgs(r), /movements appeared at this location while importing/);
+    assert.equal(r.errors[0]!.line, 3);
+    const ms = await owner(async (c) => (await c.query('select reason from stock_movements where tenant_id = $1', [fx.tenant])).rows);
+    assert.deepEqual(ms.map((m) => m.reason), ['receipt'], "only the other writer's movement exists");
+    const n = await owner(async (c) => (await c.query("select count(*)::int n from item_variants where tenant_id = $1 and sku = 'NEW-0001'", [fx.tenant])).rows[0].n);
+    assert.equal(n, 0, 'the new item of the same file was rolled back');
+  } finally {
+    await hold.release().catch(() => {});
+  }
+});
+
+test('an idempotency key that belongs to a DIFFERENT movement is refused, not guessed', async () => {
+  const fx = await fixture();
+  const a = await existingItem(fx, 'IDK-0001');
+  await withTenant(POOL, fx.tenant, async (db) => {
+    // a RECEIPT carrying the key opening:IDK-0001:MAIN (existing item, wrong reason/location)
+    await postMovement(db, { variantId: a, qty: 1, reason: 'receipt', toLocationId: fx.loc.BR1!, actorUserId: fx.userId, idempotencyKey: 'opening:IDK-0001:MAIN' });
+    // another item's movement carrying the key of a brand-new sku
+    await postMovement(db, { variantId: a, qty: 1, reason: 'receipt', toLocationId: fx.loc.BR1!, actorUserId: fx.userId, idempotencyKey: 'opening:IDK-0003:MAIN' });
+  });
+  const r = await run(fx, csv('IDK-0001,صنف,consumable,unit,1,1.00,MAIN,5', 'IDK-0003,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true });
+  assert.equal(r.ok, false);
+  assert.match(msgs(r), /2: idempotency key opening:IDK-0001:MAIN already belongs to a different movement/);
+  assert.match(msgs(r), /3: idempotency key opening:IDK-0003:MAIN already belongs to a different movement/);
+});
+
+test("a new sku equal to another item's BARCODE is refused with a clear message", async () => {
+  const fx = await fixture();
+  await withTenant(POOL, fx.tenant, (db) =>
+    createItem(db, { sku: 'OLD-0001', barcode: 'ZZ-0001', nameAr: 'صنف', family: 'consumable', uom: 'unit', packFactor: 1, costEgp: 1 }),
+  );
+  const r = await run(fx, csv('ZZ-0001,صنف,consumable,unit,1,1.00,MAIN,5'), { apply: true });
+  assert.equal(r.ok, false);
+  assert.match(msgs(r), /2: code ZZ-0001 is already used as the barcode of item OLD-0001/);
+  assert.doesNotMatch(msgs(r), /database refused/);
+});
+
+test('BOMs: one stripped by the decoder; a second one, or one inside a quoted header cell, is tolerated', () => {
+  const body = 'PEN-0001,قلم,consumable,unit,1,1.00,MAIN,5\n';
+  for (const text of [`\uFEFF${HEADER}\n${body}`, `\uFEFF\uFEFF${HEADER}\n${body}`, `\uFEFF"\uFEFFsku",${HEADER.split(',').slice(1).join(',')}\n${body}`]) {
+    const p = parseOpeningCsv(Buffer.from(text, 'utf8'));
+    assert.deepEqual(p.errors, []);
+    assert.equal(p.rows[0]!.sku, 'PEN-0001');
+  }
+});
+
+test('COMMIT is checked: a transaction that was aborted underneath cannot report success', async () => {
+  const fx = await fixture();
+  await assert.rejects(
+    withTenant(
+      POOL,
+      fx.tenant,
+      async (db) => {
+        await db.query("insert into locations (tenant_id, code, name_ar, type) values (nullif(current_setting('app.tenant_id', true), '')::uuid, 'ABT', 'x', 'warehouse')");
+        await db.query('select 1/0').catch(() => {});
+      },
+      { requireCommit: true },
+    ),
+    /rolled back|did not commit/i,
+  );
+  assert.equal(await owner(async (c) => (await c.query("select count(*)::int n from locations where tenant_id = $1 and code = 'ABT'", [fx.tenant])).rows[0].n), 0);
+  // the import, through a pool whose COMMIT is preceded by a swallowed error
+  const fake = {
+    totalCount: 0,
+    query: (...a: unknown[]) => (POOL.query as (...x: unknown[]) => unknown)(...a),
+    connect: async () => {
+      const real = await POOL.connect();
+      return new Proxy(real, {
+        get(t, k) {
+          if (k === 'query') {
+            return async (q: unknown, ...rest: unknown[]) => {
+              if (q === 'commit') await t.query('select 1/0').catch(() => {});
+              return (t.query as (...a: unknown[]) => unknown)(q, ...rest);
+            };
+          }
+          const v = Reflect.get(t, k) as unknown;
+          return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    },
+  } as unknown as Pool;
+  await assert.rejects(run(fx, readFileSync(SAMPLE), { apply: true, pool: fake }), /rolled back|did not commit/i);
+  assert.equal((await movements(fx.tenant)).length, 0, 'nothing was saved, and SAVED was never reported');
+});
+
+test('re-running with nothing to post prints NOTHING TO DO, not SAVED', async () => {
+  const fx = await fixture();
+  const first = await run(fx, readFileSync(SAMPLE), { apply: true });
+  assert.match(formatSummary(first, true), /RESULT: SAVED\./);
+  const again = await run(fx, readFileSync(SAMPLE), { apply: true });
+  assert.equal(again.ok, true);
+  const out = formatSummary(again, true);
+  assert.match(out, /RESULT: NOTHING TO DO — every line was already imported/);
+  assert.doesNotMatch(out, /SAVED/);
 });

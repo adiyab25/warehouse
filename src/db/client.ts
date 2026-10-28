@@ -103,17 +103,35 @@ export async function withTenant<T>(
   source: Pool | Queryable,
   tenantId: string,
   fn: (db: Queryable) => Promise<T>,
+  opts: { requireCommit?: boolean } = {},
 ): Promise<T> {
   if (inWithTenant.getStore()) {
     throw new Error('withTenant: already inside a transaction');
   }
-  return inWithTenant.run(true, () => runWithTenant(source, tenantId, fn));
+  return inWithTenant.run(true, () => runWithTenant(source, tenantId, fn, opts));
+}
+
+/**
+ * `COMMIT` on a transaction that was aborted underneath us (an error the caller
+ * swallowed) does not throw: Postgres silently ROLLS BACK and answers with the
+ * command tag `ROLLBACK`. Anything other than `COMMIT` means nothing was saved,
+ * so refuse to report success. Opt-in (`requireCommit`): the shared default stays
+ * lenient because existing callers/tests swallow a DB error inside withTenant and
+ * rely on the silent rollback. (A bare stub that returns no tag is let through:
+ * only a real server can tell us.)
+ */
+export function assertCommitted(res: unknown): void {
+  const tag = (res as { command?: unknown } | undefined)?.command;
+  if (typeof tag === 'string' && tag !== 'COMMIT') {
+    throw new Error(`withTenant: the transaction was rolled back instead of committed (server answered ${tag}) — nothing was saved`);
+  }
 }
 
 async function runWithTenant<T>(
   source: Pool | Queryable,
   tenantId: string,
   fn: (db: Queryable) => Promise<T>,
+  opts: { requireCommit?: boolean },
 ): Promise<T> {
   const pooled = isPool(source);
   const client = pooled
@@ -137,7 +155,8 @@ async function runWithTenant<T>(
     try {
       await db.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
       const result = await fn(db);
-      await db.query('commit');
+      const committed = await db.query('commit');
+      if (opts.requireCommit) assertCommitted(committed);
       return result;
     } catch (err) {
       await db.query('rollback').catch(() => {});

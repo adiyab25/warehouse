@@ -47,13 +47,42 @@ export const MAX_ERRORS_SHOWN = 50;
 export const FAMILIES = ['sellable', 'consumable', 'asset'] as const satisfies readonly ItemFamily[];
 export const ALLOWED_LOCATION_TYPES = ['warehouse', 'branch', 'quarantine'] as const;
 export const ALLOWED_ROLES = ['owner', 'warehouse_manager'] as const;
-/** Units that are measured, not counted: items in these are created non-discrete. */
-export const MEASURED_UOMS = ['kg', 'g', 'l', 'ml', 'm', 'cm', 'mm', 'ton'] as const;
+/** Units that are measured, not counted: a NEW item in one of these (blank `discrete`) may be fractional. */
+export const MEASURED_UOMS = [
+  'kg', 'g', 'gram', 'l', 'litre', 'liter', 'ml', 'm', 'metre', 'meter', 'cm', 'mm', 'ton', 'tonne', 'yard', 'yd',
+  'كيلو', 'كجم', 'جرام', 'جم', 'لتر', 'متر', 'سم', 'طن', 'ياردة',
+] as const;
+export const OPTIONAL_COLUMNS = ['discrete'] as const;
+const DISCRETE_VALUES: Record<string, boolean> = { yes: true, true: true, '1': true, no: false, false: false, '0': false };
 const MAX_NAME = 200;
 const MAX_UOM = 20;
 const MAX_CODE = 64;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** Bidi overrides/isolates and zero-width characters: invisible, and they reorder or hide text. */
+const HIDDEN = /[\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/;
+const UNSAFE_G = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
+
+/**
+ * The ONE way any value from a file / command line is echoed in a message, the
+ * summary or a stored note: control and bidi/zero-width characters become
+ * `\uXXXX` (a terminal escape sequence can never run), and long text is capped.
+ */
+export function safeText(raw: string, max = 60): string {
+  const cut = [...raw];
+  return escapeUnsafe(cut.length > max ? `${cut.slice(0, max).join('')}…` : raw);
+}
+
+/** Escapes (without capping) every control / bidi / zero-width character. */
+export function escapeUnsafe(raw: string): string {
+  return raw.replace(UNSAFE_G, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** Does the unit mean a measured quantity (so a NEW item may be fractional)? */
+export function isMeasuredUom(uom: string): boolean {
+  const k = uom.normalize('NFKC').trim().toLowerCase().replace(/\.$/, '').trim();
+  return (MEASURED_UOMS as readonly string[]).includes(k);
+}
 
 export interface ImportError {
   /** CSV line number (1 = the header), or null for a whole-file problem. */
@@ -72,6 +101,11 @@ export interface OpeningRow {
   locationCode: string;
   qty: string;
   qtyIsZero: boolean;
+  /** The value of the `discrete` cell: true/false, or null when blank / no such column. */
+  discreteGiven: boolean | null;
+  /** The flag a NEW item gets: the given value, else derived from the unit. */
+  discrete: boolean;
+  discreteSource: 'given' | 'derived';
 }
 
 /** The advisory-lock key text — exported so a test can hold the same lock. */
@@ -186,7 +220,7 @@ export function parseCsv(text: string): { records: CsvRecord[]; errors: ImportEr
 /** Decodes strictly as UTF-8 (BOM stripped). Never silently mojibakes Arabic. */
 export function decodeUtf8(bytes: Uint8Array): { text?: string; error?: ImportError } {
   try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '');
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); // also strips one leading BOM
     return { text };
   } catch {
     return {
@@ -223,34 +257,35 @@ export function decimalProblem(raw: string, rule: DecimalRule): string | null {
   const { label, maxInt, maxDec, positive } = rule;
   const s = raw.trim();
   if (s === '') return `${label} is blank`;
+  const q = safeText(s);
   if (/[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19]/.test(s)) {
-    return `${label} "${s}" uses Arabic-Indic or full-width digits — retype it with plain digits 0-9`;
+    return `${label} "${q}" uses Arabic-Indic or full-width digits — retype it with plain digits 0-9`;
   }
-  if (/^[-\u2212]/.test(s)) return `${label} "${s}" is negative`;
-  if (s.startsWith('+')) return `${label} "${s}" starts with a plus sign — write the bare number`;
-  if (/^(nan|inf|infinity)$/i.test(s)) return `${label} "${s}" is not a number`;
+  if (/^[-\u2212]/.test(s)) return `${label} "${q}" is negative`;
+  if (s.startsWith('+')) return `${label} "${q}" starts with a plus sign — write the bare number`;
+  if (/^(nan|inf|infinity)$/i.test(s)) return `${label} "${q}" is not a number`;
   if (/[$£€¥]|egp|\bl\.?e\b|ج\.?م/i.test(s)) {
-    return `${label} "${s}" contains a currency sign or text — write only the number`;
+    return `${label} "${q}" contains a currency sign or text — write only the number`;
   }
   if (/^\d+(\.\d+)?e[-+]?\d+$/i.test(s)) {
-    return `${label} "${s}" is in scientific notation — write it out in full`;
+    return `${label} "${q}" is in scientific notation — write it out in full`;
   }
   if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
-    return `${label} "${s}" has a thousands separator — remove the comma`;
+    return `${label} "${q}" has a thousands separator — remove the comma`;
   }
   if (/^\d+,\d+$/.test(s)) {
-    return `${label} "${s}" uses a comma as the decimal point — use a dot (1.5)`;
+    return `${label} "${q}" uses a comma as the decimal point — use a dot (1.5)`;
   }
   if (!/^\d+(\.\d+)?$/.test(s)) {
-    return `${label} "${s}" is not a plain decimal number (digits 0-9 with an optional .decimals)`;
+    return `${label} "${q}" is not a plain decimal number (digits 0-9 with an optional .decimals)`;
   }
   const [int = '', dec = ''] = s.split('.');
-  if (maxDec === 0 && s.includes('.')) return `${label} "${s}" must be a whole number`;
-  if (dec.length > maxDec) return `${label} "${s}" has more than ${maxDec} decimal places`;
-  if (/^0\d/.test(int)) return `${label} "${s}" has leading zeros`;
-  if (int.length > maxInt) return `${label} "${s}" is too large (at most ${maxInt} digits before the point)`;
+  if (maxDec === 0 && s.includes('.')) return `${label} "${q}" must be a whole number`;
+  if (dec.length > maxDec) return `${label} "${q}" has more than ${maxDec} decimal places`;
+  if (/^0\d/.test(int)) return `${label} "${q}" has leading zeros`;
+  if (int.length > maxInt) return `${label} "${q}" is too large (at most ${maxInt} digits before the point)`;
   const isZero = /^0+(\.0+)?$/.test(s);
-  if (positive && isZero) return `${label} "${s}" must be greater than zero`;
+  if (positive && isZero) return `${label} "${q}" must be greater than zero`;
   return null;
 }
 
@@ -290,23 +325,24 @@ export function parseOpeningCsv(bytes: Uint8Array): {
     return { rows: [], rowsRead: 0, errors };
   }
   const names = header.fields.map((h) => h.trim().toLowerCase());
-  const want = new Set<string>(COLUMNS);
+  const want = new Set<string>([...COLUMNS, ...OPTIONAL_COLUMNS]);
   const seen = new Set<string>();
   const dup = new Set<string>();
   for (const nm of names) (seen.has(nm) ? dup : seen).add(nm);
   const missing = COLUMNS.filter((c) => !seen.has(c));
   const unknown = [...seen].filter((c) => !want.has(c));
-  if (dup.size) errors.push({ line: header.line, message: `header repeats column(s): ${[...dup].join(', ')}` });
+  if (dup.size) errors.push({ line: header.line, message: `header repeats column(s): ${[...dup].map((d) => safeText(d)).join(', ')}` });
   if (missing.length) errors.push({ line: header.line, message: `header is missing column(s): ${missing.join(', ')}` });
   if (unknown.length) {
     errors.push({
       line: header.line,
-      message: `header has unknown column(s): ${unknown.map((u) => JSON.stringify(u)).join(', ')} (expected exactly: ${COLUMNS.join(', ')})`,
+      message: `header has unknown column(s): ${unknown.map((u) => `"${safeText(u)}"`).join(', ')} (expected: ${COLUMNS.join(', ')}, and optionally ${OPTIONAL_COLUMNS.join(', ')})`,
     });
   }
   if (dup.size || missing.length || unknown.length) return { rows: [], rowsRead: 0, errors };
 
   const idx = Object.fromEntries(COLUMNS.map((c) => [c, names.indexOf(c)])) as Record<Column, number>;
+  const discreteIdx = names.indexOf('discrete');
   const data = records.slice(1);
   if (data.length === 0 && csvErrors.length === 0) {
     errors.push({ line: null, message: 'the file has a header but no data rows — nothing to import' });
@@ -331,33 +367,47 @@ export function parseOpeningCsv(bytes: Uint8Array): {
     const skuRaw = get('sku').trim();
     const sku = normaliseScannedCode(skuRaw);
     if (skuRaw === '') rowErrors.push('sku is blank');
+    else if (HIDDEN.test(get('sku'))) rowErrors.push('sku contains a hidden character (invisible or text-direction mark) — retype it');
     else if (!isValidScannedCode(skuRaw) || sku.length > MAX_CODE) {
       rowErrors.push(
-        `sku "${skuRaw}" is not a code the scanner can read (letters/digits joined by hyphens, like PEN-0001) — its label could never be scanned`,
+        `sku "${safeText(skuRaw)}" is not a code the scanner can read (letters/digits joined by hyphens, like PEN-0001) — its label could never be scanned`,
       );
     }
 
     const nameAr = canonName(get('name_ar'));
     if (nameAr === '') rowErrors.push('name_ar is blank');
+    else if (HIDDEN.test(get('name_ar'))) rowErrors.push('name_ar contains a hidden character (invisible or text-direction mark) — retype it');
     else if (CONTROL.test(get('name_ar').trim())) rowErrors.push('name_ar contains a control character (line break or similar)');
     else if (nameAr.length > MAX_NAME) rowErrors.push(`name_ar is longer than ${MAX_NAME} characters`);
 
     const familyRaw = get('family').trim().toLowerCase();
     if (!(FAMILIES as readonly string[]).includes(familyRaw)) {
-      rowErrors.push(`family "${get('family').trim()}" is not one of: ${FAMILIES.join(', ')}`);
+      rowErrors.push(`family "${safeText(get('family').trim())}" is not one of: ${FAMILIES.join(', ')}`);
     }
 
     const uom = get('uom').trim();
     if (uom === '') rowErrors.push('uom is blank');
+    else if (HIDDEN.test(get('uom'))) rowErrors.push('uom contains a hidden character (invisible or text-direction mark) — retype it');
     else if (CONTROL.test(uom)) rowErrors.push('uom contains a control character');
     else if (uom.length > MAX_UOM) rowErrors.push(`uom is longer than ${MAX_UOM} characters`);
 
     const locationCode = get('location_code').trim().toUpperCase();
     if (locationCode === '') rowErrors.push('location_code is blank');
+    else if (HIDDEN.test(get('location_code'))) rowErrors.push('location_code contains a hidden character (invisible or text-direction mark) — retype it');
     else if (CONTROL.test(locationCode) || locationCode.length > MAX_CODE) {
-      rowErrors.push(`location_code "${get('location_code').trim()}" is not a valid location code`);
+      rowErrors.push(`location_code "${safeText(get('location_code').trim())}" is not a valid location code`);
     }
 
+    let discreteGiven: boolean | null = null;
+    if (discreteIdx >= 0) {
+      const dv = (rec.fields[discreteIdx] ?? '').trim();
+      if (dv !== '') {
+        const key = dv.toLowerCase();
+        if (!Object.hasOwn(DISCRETE_VALUES, key)) {
+          rowErrors.push(`discrete "${safeText(dv)}" is not allowed — use one of: yes, no, true, false, 1, 0 (or leave it blank to decide from the unit)`);
+        } else discreteGiven = DISCRETE_VALUES[key]!;
+      }
+    }
     const packProblem = decimalProblem(get('pack_factor'), PACK_RULE);
     if (packProblem) rowErrors.push(packProblem);
     const costProblem = decimalProblem(get('cost_egp'), COST_RULE);
@@ -381,6 +431,9 @@ export function parseOpeningCsv(bytes: Uint8Array): {
       locationCode,
       qty: canonDecimal(qtyRaw),
       qtyIsZero: /^0+(\.0+)?$/.test(qtyRaw),
+      discreteGiven,
+      discrete: discreteGiven ?? !isMeasuredUom(uom),
+      discreteSource: discreteGiven === null ? 'derived' : 'given',
     });
   }
   return { rows, rowsRead: data.length, errors };
@@ -429,7 +482,14 @@ type VariantInfo = {
   discrete: boolean;
 };
 
-type PlanEntry = { row: OpeningRow; create: boolean; variantId: string | null; locationId: string; discrete: boolean };
+type PlanEntry = {
+  row: OpeningRow;
+  create: boolean;
+  variantId: string | null;
+  locationId: string;
+  discrete: boolean;
+  source: 'given' | 'derived' | 'stored';
+};
 
 class RowFailure extends Error {}
 class Rollback extends Error {
@@ -452,17 +512,18 @@ function money(c: string): string {
   return `${i}.${d.padEnd(2, '0')}`;
 }
 
-function isMeasured(uom: string): boolean {
-  return (MEASURED_UOMS as readonly string[]).includes(uom.toLowerCase());
+function discreteWords(discrete: boolean, source: 'given' | 'derived' | 'stored'): string {
+  return `${discrete ? 'counted in whole units' : 'may be fractional'} (${source})`;
 }
 
 export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise<ImportResult> {
+  const base = safeText((opts.fileName.split(/[\\/]/).pop() ?? opts.fileName).slice(0, 120), 120);
   const result: ImportResult = {
     ok: false,
     applied: false,
-    tenantId: opts.tenantId,
+    tenantId: safeText(opts.tenantId, 80),
     actor: null,
-    fileName: opts.fileName,
+    fileName: base,
     rowsRead: 0,
     itemsToCreate: 0,
     movementsToPost: 0,
@@ -476,7 +537,7 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
   };
 
   if (!UUID.test(opts.tenantId)) {
-    fail(null, `--tenant "${opts.tenantId}" is not a valid tenant id (a UUID)`);
+    fail(null, `--tenant "${safeText(opts.tenantId)}" is not a valid tenant id (a UUID)`);
     return result;
   }
   const username = normaliseUsername(opts.username);
@@ -484,10 +545,12 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
     fail(null, '--user is required: the username of the owner or warehouse manager doing the import');
     return result;
   }
+  if (CONTROL.test(opts.username) || HIDDEN.test(opts.username) || CONTROL.test(username)) {
+    fail(null, `--user "${safeText(opts.username)}" contains a control or hidden character — type the username again`);
+    return result;
+  }
   // REFUSE a connection that bypasses row-level security (throws).
   await assertServingRole(pool);
-
-  const base = (opts.fileName.split(/[\\/]/).pop() ?? opts.fileName).slice(0, 120);
 
   try {
     await withTenant(pool, opts.tenantId, async (db) => {
@@ -502,11 +565,11 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
       );
       const user = users[0];
       if (!user) {
-        fail(null, `user "${username}" does not exist in this tenant — nothing was read or written`);
+        fail(null, `user "${safeText(username)}" does not exist in this tenant — nothing was read or written`);
       } else if (!user.active) {
-        fail(null, `user "${username}" is deactivated — nothing was read or written`);
+        fail(null, `user "${safeText(username)}" is deactivated — nothing was read or written`);
       } else if (!(ALLOWED_ROLES as readonly string[]).includes(user.role)) {
-        fail(null, `user "${username}" has role ${user.role}; only an owner or warehouse_manager may import opening balances`);
+        fail(null, `user "${safeText(username)}" has role ${user.role}; only an owner or warehouse_manager may import opening balances`);
       }
       if (!user || result.errors.length) throw new Rollback(result);
       result.actor = username;
@@ -516,7 +579,7 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
       try {
         bytes = await opts.readInput();
       } catch (err) {
-        fail(null, `could not read the file: ${err instanceof Error ? err.message : String(err)}`);
+        fail(null, `could not read the file: ${safeText(err instanceof Error ? err.message : String(err), 300)}`);
         throw new Rollback(result);
       }
       const parsed = parseOpeningCsv(bytes);
@@ -616,6 +679,18 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
         }
       }
 
+      // `discrete` for a NEW sku: any row that GIVES it decides (blank rows have no opinion);
+      // two rows that give different values are an error.
+      const newDiscrete = new Map<string, { value: boolean; line: number }>();
+      for (const r of unique) {
+        if (variantBySku.has(r.sku) || r.discreteGiven === null) continue;
+        const prev = newDiscrete.get(r.sku);
+        if (!prev) newDiscrete.set(r.sku, { value: r.discreteGiven, line: r.line });
+        else if (prev.value !== r.discreteGiven) {
+          fail(r.line, `sku ${r.sku} also appears on line ${prev.line} with a different discrete: "${r.discreteGiven ? 'yes' : 'no'}" vs "${prev.value ? 'yes' : 'no'}". One item, one set of details`);
+        }
+      }
+
       // --- per-row checks (read-only; build the plan) ---
       const plan: PlanEntry[] = [];
       const newSkuFirst = new Map<string, OpeningRow>();
@@ -646,29 +721,38 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
             diffs.push(['pack_factor', r.packFactor, v.pack_factor === null ? '(none)' : canonDecimal(v.pack_factor)]);
           }
           if (canonDecimal(v.cost_egp) !== r.costEgp) diffs.push(['cost_egp', r.costEgp, canonDecimal(v.cost_egp)]);
+          if (r.discreteGiven !== null && r.discreteGiven !== v.discrete) {
+            diffs.push(['discrete', r.discreteGiven ? 'yes' : 'no', v.discrete ? 'yes' : 'no']);
+          }
           for (const [field, csv, stored] of diffs) {
             fail(
               r.line,
-              `item ${r.sku} already exists but ${field} differs: CSV has "${csv}", the item has "${stored}". The import never edits an item — fix the CSV or edit the item itself`,
+              `item ${r.sku} already exists but ${field} differs: CSV has "${safeText(csv, 200)}", the item has "${safeText(stored, 200)}". The import never edits an item — fix the CSV or edit the item itself`,
             );
           }
         } else {
-          discrete = !isMeasured(r.uom);
+          discrete = newDiscrete.get(r.sku)?.value ?? r.discrete;
           const owner = barcodeOwner.get(r.sku);
-          if (owner) fail(r.line, `code ${r.sku} is already used as the barcode of item ${owner}`);
+          if (owner) fail(r.line, `code ${r.sku} is already used as the barcode of item ${safeText(owner)}`);
           const first = newSkuFirst.get(r.sku);
           if (!first) newSkuFirst.set(r.sku, r);
           else {
             for (const f of ['nameAr', 'family', 'uom', 'packFactor', 'costEgp'] as const) {
               if (first[f] !== r[f]) {
-                fail(r.line, `sku ${r.sku} also appears on line ${first.line} with a different ${f === 'nameAr' ? 'name_ar' : f === 'packFactor' ? 'pack_factor' : f === 'costEgp' ? 'cost_egp' : f}: "${r[f]}" vs "${first[f]}". One item, one set of details`);
+                fail(r.line, `sku ${r.sku} also appears on line ${first.line} with a different ${f === 'nameAr' ? 'name_ar' : f === 'packFactor' ? 'pack_factor' : f === 'costEgp' ? 'cost_egp' : f}: "${safeText(r[f], 200)}" vs "${safeText(first[f], 200)}". One item, one set of details`);
               }
             }
           }
         }
 
         if (discrete && !/^\d+(\.0+)?$/.test(r.qty) && r.qty.includes('.')) {
-          fail(r.line, `qty ${r.qty} is not a whole number but item ${r.sku} (uom "${r.uom}") is counted in whole units. Fractions are only allowed for measured units (${MEASURED_UOMS.join(', ')})`);
+          fail(
+            r.line,
+            `item ${r.sku} is counted in whole units, so qty ${r.qty} is not allowed. ` +
+              (v
+                ? 'The item already exists and the import never edits it, so fix the qty.'
+                : 'If it can be fractional (metres, kilos), put no in the discrete column and import again; if it is whole, fix the qty.'),
+          );
         }
 
         // Opening balance must be FIRST, and a re-run must not swallow a different number.
@@ -703,7 +787,14 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
           result.unchanged++;
           continue;
         }
-        plan.push({ row: r, create: !v, variantId: v?.id ?? null, locationId: loc!.id, discrete });
+        plan.push({
+          row: r,
+          create: !v,
+          variantId: v?.id ?? null,
+          locationId: loc!.id,
+          discrete,
+          source: v ? (r.discreteGiven === null ? 'stored' : 'given') : newDiscrete.has(r.sku) ? 'given' : 'derived',
+        });
       }
 
       // A new sku is created once, at its first posted row.
@@ -745,7 +836,7 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
               discrete: p.discrete,
             });
             variantIds.set(r.sku, variant.id);
-            result.plan.push(`line ${r.line}: create item ${r.sku} "${r.nameAr}" (${r.family}, ${r.uom}, cost ${money(r.costEgp)})`);
+            result.plan.push(`line ${r.line}: create item ${r.sku} "${safeText(r.nameAr, 200)}" (${r.family}, ${safeText(r.uom)}, cost ${money(r.costEgp)}) — ${discreteWords(p.discrete, p.source)}`);
           }
           const variantId = variantIds.get(r.sku)!;
           // Pair lock per posted row, like every other ledger writer — but only for
@@ -775,17 +866,17 @@ export async function runOpeningImport(pool: Pool, opts: ImportOptions): Promise
             discrete: p.discrete,
           });
           if (posted.deduped) throw new RowFailure('the opening movement for this row already exists (posted by a concurrent writer)');
-          result.plan.push(`line ${r.line}: post opening balance +${r.qty} ${r.sku} -> ${r.locationCode}`);
+          result.plan.push(`line ${r.line}: post opening balance +${r.qty} ${r.sku} -> ${r.locationCode} — ${discreteWords(p.discrete, p.source)}`);
         }
       } catch (err) {
-        fail(lineNow || null, err instanceof RowFailure ? err.message : `the database refused this row: ${err instanceof Error ? err.message : String(err)}`);
+        fail(lineNow || null, err instanceof RowFailure ? err.message : `the database refused this row: ${safeText(err instanceof Error ? err.message : String(err), 300)}`);
         throw new Rollback(finish(result, plan));
       }
       finish(result, plan);
       result.ok = true;
       if (!opts.apply) throw new Rollback(result);
       result.applied = true;
-    });
+    }, { requireCommit: true });
   } catch (err) {
     if (err instanceof Rollback) {
       return err.result;
@@ -814,9 +905,9 @@ export function formatSummary(r: ImportResult, apply: boolean): string {
   const out: string[] = [];
   const mode = apply ? 'APPLY' : 'DRY RUN (nothing is saved — add --apply to save)';
   out.push(`Opening-balance import — ${mode}`);
-  out.push(`  tenant:  ${r.tenantId}`);
-  out.push(`  user:    ${r.actor ?? '(not resolved)'}`);
-  out.push(`  file:    ${r.fileName}`);
+  out.push(`  tenant:  ${safeText(r.tenantId, 80)}`);
+  out.push(`  user:    ${safeText(r.actor ?? '(not resolved)')}`);
+  out.push(`  file:    ${safeText(r.fileName, 120)}`);
   out.push(`  rows read:            ${r.rowsRead}`);
   out.push(`  items to create:      ${r.itemsToCreate}`);
   out.push(`  movements to post:    ${r.movementsToPost}`);
@@ -825,14 +916,20 @@ export function formatSummary(r: ImportResult, apply: boolean): string {
   out.push(`  errors:               ${r.errors.length}`);
   if (r.plan.length) {
     out.push('Actions:');
-    for (const p of r.plan.slice(0, 30)) out.push(`  ${p}`);
+    for (const p of r.plan.slice(0, 30)) out.push(`  ${escapeUnsafe(p)}`);
     if (r.plan.length > 30) out.push(`  ... and ${r.plan.length - 30} more`);
   }
   if (r.errors.length) {
     out.push('ERRORS:');
-    for (const e of r.errors.slice(0, MAX_ERRORS_SHOWN)) out.push(`  ${e.line === null ? 'file' : `line ${e.line}`}: ${e.message}`);
+    for (const e of r.errors.slice(0, MAX_ERRORS_SHOWN)) out.push(`  ${e.line === null ? 'file' : `line ${e.line}`}: ${escapeUnsafe(e.message)}`);
     if (r.errors.length > MAX_ERRORS_SHOWN) out.push(`  ... and ${r.errors.length - MAX_ERRORS_SHOWN} more`);
     out.push('RESULT: FAILED — nothing was saved.');
+  } else if (r.applied && r.movementsToPost === 0) {
+    out.push(
+      r.skippedZero === 0
+        ? 'RESULT: NOTHING TO DO — every line was already imported'
+        : 'RESULT: NOTHING TO DO — every line was already imported or has a quantity of 0',
+    );
   } else if (r.applied) {
     out.push('RESULT: SAVED.');
   } else {
