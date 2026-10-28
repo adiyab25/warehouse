@@ -20,10 +20,13 @@
 -- a transaction (see src/db/client.ts::withTenant). `SET LOCAL app.tenant_id =
 -- $1` cannot take a parameter and would error — never write it.
 --
--- `force row level security` matters because a table's OWNER bypasses its own
--- RLS policies. Migrations are applied by the owner (scripts/migrate.mjs), so
--- without FORCE the policies would not bind the owner at all; FORCE closes that
--- gap so even an owner connection is subject to the policy.
+-- `force row level security` makes the policy bind the table's OWNER, which
+-- would otherwise bypass its own policies. It does NOT bind a superuser, and it
+-- does not bind a role holding BYPASSRLS: those bypass every policy, FORCE or
+-- not. That is exactly why the ONE SECURITY DEFINER resolver added in 0010 works
+-- (its owner is `postgres`, a superuser) — and why the migrations must be
+-- applied as a role that is superuser-or-BYPASSRLS. 0010's resolver depends on
+-- that property and tests/contract/auth-resolver-security.test.ts guards it.
 --
 -- Provisioning a tenant is deliberately NOT something the app role can do: the
 -- `tenants` policy is keyed on the row's own `id`, so a fresh tenant can never

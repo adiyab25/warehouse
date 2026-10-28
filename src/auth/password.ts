@@ -80,7 +80,11 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
 
   // `derived` and `parsed.key` are the same length by construction, so
   // timingSafeEqual is safe to call — and its whole point is that it never
-  // short-circuits on the first differing byte.
+  // short-circuits on the first differing byte. This comparison is DELIBERATELY
+  // `timingSafeEqual`, never `===` (or a hex-string equality): a byte-by-byte
+  // string comparison exits at the first differing character, and the time that
+  // takes reveals how much of a guess was correct. The length guard above keeps
+  // the two buffers equal so the comparison itself can never throw.
   return timingSafeEqual(derived, parsed.key);
 }
 

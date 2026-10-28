@@ -75,6 +75,40 @@ npm run ci           # tsc --noEmit + eslint . + npm test — the gate for every
 Migrating twice is a no-op: each migration runs in its own transaction and is
 recorded by filename in `public.schema_migrations`.
 
+## Which tenant this deployment serves
+
+**v1 is one deployment per client**, so the tenant is deployment *configuration*,
+not a runtime lookup. The app reads the tenant id from the `TENANT_ID`
+environment variable at boot (`src/auth/tenant.ts::configuredTenantId`) and pins
+`app.tenant_id` with it before any session exists — which is what lets Task 11's
+auth shell read `app_users` to check a password and read a session cookie back.
+A missing or malformed `TENANT_ID` **throws at boot**: a deployment that does not
+know its tenant must fail loudly, never silently scope to nothing.
+
+There is deliberately **no host/subdomain → tenant resolver** and no second
+`security definer` function. The database cannot supply one today: `tenants` has
+only `(id, name, created_at)` — no host or slug column — and its policy is
+`id = current_setting('app.tenant_id')`, so a connection with no tenant pinned
+cannot look a tenant up, and a scoped one can only see the tenant it is already
+scoped to. A host/subdomain mapping is a **later, deliberate addition** for the
+SaaS end state (many tenants behind one host, resolved per request); making that
+choice should be an explicit design step, not a side effect of the auth shell.
+
+### Obligations the auth shell (Task 11) inherits
+
+These are recorded in `src/auth/session.ts` and are **required at sign-in but
+deliberately not implemented here** (no login route exists yet):
+
+- **Rate limit and lockout on login** are not implemented. They must be added
+  with the login endpoint; an unthrottled password check is a free oracle.
+- The **unknown-user path must be constant-time**: on a username that does not
+  exist, still run the password KDF (`src/auth/password.ts`) against a fixed
+  dummy hash and fail, so response time cannot enumerate users.
+- A **password change does not invalidate live sessions**. `readSession` looks at
+  the session and the user's `active` flag, not the password hash, so existing
+  sessions survive until they expire. If the shell wants them gone, it must
+  explicitly set `revoked_at` on that user's sessions.
+
 ## Rules that outlive this task
 
 - Migrations are **always new files** (`NNNN_name.sql`), never edits to an applied one.

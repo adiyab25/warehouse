@@ -10,6 +10,28 @@ import { generateToken, hashToken } from './token.ts';
  * live credential back out. Every session carries a mandatory `expires_at`;
  * {@link readSession} treats an expired or revoked row as a miss (null), never
  * an error.
+ *
+ * ---- NOTES REQUIRED BY TASK 11 (the auth shell) — deliberately NOT built here
+ * There is no login route yet, so the following are DECISIONS recorded for the
+ * shell rather than code in this module:
+ *
+ *   * NO RATE LIMIT AND NO LOCKOUT on sign-in. Acceptable for v1 (there is no
+ *     login endpoint to protect), but the shell MUST add throttling/lockout when
+ *     it adds one — an unthrottled password endpoint is a free oracle.
+ *   * The UNKNOWN-USER path MUST be constant-time: when a supplied username does
+ *     not exist, task 11 must still run the password KDF against a fixed DUMMY
+ *     hash (via src/auth/password.ts) and fail, so the response time cannot be
+ *     used to enumerate which users exist. Comparing only when the user is found
+ *     leaks that difference in timing. NOT implemented here because it belongs to
+ *     the login flow, not to session storage.
+ *   * A PASSWORD CHANGE does NOT invalidate live sessions. `readSession` checks
+ *     the session and the user's `active` flag, not the password hash, so
+ *     changing a password leaves every already-issued session valid until it
+ *     expires. This is a DELIBERATE v1 decision — passwords are re-hashed in
+ *     place and stored sessions survive — and the shell must either accept it or
+ *     explicitly revoke this user's sessions (`update sessions set revoked_at =
+ *     now() where user_id = $1 and tenant_id = …`) on a password change. It is
+ *     called out here so it is a stated decision, not a surprise.
  */
 
 /** The three roles a person may hold. Mirrors the `app_users.role` CHECK. */
@@ -94,8 +116,14 @@ export async function createSession(
  * Resolves a raw session token to its user, tenant and role — or `null`.
  *
  * Returns null for a token that is unknown, EXPIRED (`expires_at` in the past),
- * REVOKED (`revoked_at` set) or belongs to a deactivated user. A miss is a plain
- * null, never an error: the caller's whole decision is "signed in or not".
+ * REVOKED (`revoked_at` set) or belongs to a DEACTIVATED user (`u.active` is
+ * false). The `u.active` join is the offboarding hook Task 11 leans on: setting
+ * a user inactive ends every live session immediately, without hunting down and
+ * revoking individual tokens (guarded by
+ * tests/contract/auth-guards.test.ts). A miss is a plain null, never an error:
+ * the caller's whole decision is "signed in or not".
+ *
+ * NOTE: this is NOT affected by a password change — see the module docstring.
  *
  * TENANT-SCOPED, deliberately. A sign-in names the tenant (the login form / host
  * does), so the app has already pinned `app.tenant_id` by the time it reads a

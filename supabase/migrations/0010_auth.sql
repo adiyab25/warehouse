@@ -58,8 +58,13 @@ create table sessions (
   -- tenant's id.
   user_id uuid not null,
   -- The token, stored ONLY as a hash (sha256 hex). Never the raw token: a
-  -- database read must not be able to reconstruct a live credential.
-  token_hash text not null unique,
+  -- database read must not be able to reconstruct a live credential. The CHECK
+  -- pins it to EXACTLY a sha256 hex digest — every other stored identifier in
+  -- this schema is normalised and constrained (0003/0004/0005), and a token
+  -- hash is the most security-relevant value in the database: an unbounded
+  -- `text` would accept a raw token, a truncated digest or a typo.
+  token_hash text not null unique
+    constraint sessions_token_hash_sha256_check check (token_hash ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
   -- REQUIRED: every session expires. readSession refuses an expired row, so a
   -- token leaked to a log is not a permanent key.
@@ -100,8 +105,10 @@ create table api_clients (
   name text not null constraint api_clients_name_normalised_check
     check (name = btrim(name) and name <> ''),
   -- The key, stored ONLY as a hash (sha256 hex). Returned once at issue time and
-  -- never retrievable afterwards.
-  token_hash text not null unique,
+  -- never retrievable afterwards. The CHECK pins it to exactly a sha256 hex
+  -- digest (see the same constraint on `sessions` above).
+  token_hash text not null unique
+    constraint api_clients_token_hash_sha256_check check (token_hash ~ '^[0-9a-f]{64}$'),
   -- What the key may do. Closed to the two the API understands today; the
   -- default is the least privilege — read.
   scopes text[] not null default '{read}',
@@ -145,16 +152,40 @@ alter table stock_movements
 -- ---- THE ONE SANCTIONED EXCEPTION TO TENANT SCOPING -------------------------
 -- Resolving an api token requires reading `api_clients` before any tenant is
 -- known; a tenant-scoped read would hide the row needed to learn the tenant.
--- This SECURITY DEFINER function runs with the definer's rights (the table's
--- owner, who is not bound by FORCE RLS as a superuser is not), and returns ONLY
+-- This SECURITY DEFINER function runs with the definer's rights and returns ONLY
 -- the columns needed to bootstrap. It is the only path that reads a tenant's
 -- data without `app.tenant_id` pinned, and it is restricted to one lookup:
 -- a single hash, an active client, three columns. `execute` is granted to
 -- `authenticated` alone and revoked from PUBLIC.
+--
+-- WHY IT CAN SEE THE ROW AT ALL (the property the bypass rests on): the function
+-- runs as its OWNER, and the owner here is `postgres` — a superuser. `force row
+-- level security` binds a table's OWNER, but it does NOT bind a superuser, and
+-- it does not bind any role holding BYPASSRLS; those bypass every policy, FORCE
+-- or not. So the policy on `api_clients` does not apply to this function's reads
+-- and the lookup succeeds. This is an UNSTATED deployment property: apply the
+-- migrations as a role with NEITHER rolsuper NOR rolbypassrls and this function
+-- would silently return ZERO rows and ALL api authentication would fail
+-- closed-and-broken, with no error. tests/contract/auth-resolver-security.test.ts
+-- guards it — it fails loudly if the resolver's owner stops being
+-- superuser-or-BYPASSRLS.
+--
+-- AND IT CANNOT BE TRICKED INTO FORGING A TENANT: the table is read FULLY
+-- QUALIFIED as `public.api_clients`, and `pg_temp` is pinned LAST in the
+-- search_path below. Both matter. A SECURITY DEFINER function whose search_path
+-- does not mention `pg_temp` still searches the session's TEMP schema FIRST for
+-- relation names, so an unqualified `api_clients` can be shadowed with
+-- `create temp table api_clients(...)` seeded to a SECOND tenant's id — and the
+-- resolver would return that tenant's identity, i.e. full impersonation, because
+-- the caller then scopes everything to it. Schema qualification is the fix;
+-- listing `pg_temp` last keeps it fixed even if the qualification is ever
+-- dropped by accident.
 create or replace function authenticate_api_token(p_token_hash text)
 returns table (client_id uuid, tenant_id uuid, scopes text[])
-language sql security definer set search_path = public as $$
-  select c.id, c.tenant_id, c.scopes from api_clients c
+language sql security definer
+set search_path = public, pg_temp
+as $$
+  select c.id, c.tenant_id, c.scopes from public.api_clients c
   where c.token_hash = p_token_hash and c.active;
 $$;
 
