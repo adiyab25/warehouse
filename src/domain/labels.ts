@@ -47,10 +47,13 @@
  *     root with no ellipsis. {@link truncateToWidth} estimates each character's
  *     width (Arabic vs Latin vs digit vs space, at the run's font size), cuts
  *     until the estimate fits, and appends `…`. SVG cannot measure text without
- *     a layout engine, so this is a deliberate ESTIMATE — {@link GLYPH_EM} is set
- *     CONSERVATIVELY (wider than measured), so a name it accepts does not
- *     overflow when a browser finally measures it. Truncation counts CODE POINTS
- *     (`Array.from`), so a surrogate pair is never split.
+ *     a layout engine, so this is a deliberate ESTIMATE — the per-character
+ *     widths are MEASURED across the label's whole font stack and kept per code
+ *     point in {@link MEASURED_EM}, over a per-class fallback that is itself at
+ *     or above the widest measurement of its class ({@link GLYPH_EM}), so a name
+ *     it accepts does not overflow when a browser finally measures it.
+ *     Truncation counts CODE POINTS (`Array.from`), so a surrogate pair is never
+ *     split.
  *
  * (6) MACHINE-READ VALUES ARE ISOLATED FROM ARABIC. Arabic is right-to-left; an
  *     SKU (`AB-0012`) is not. The Arabic runs therefore carry `direction="rtl"`
@@ -114,30 +117,50 @@ export const QUIET_ZONE_MODULES = 10;
 const BWIP_UNITS_PER_MODULE = 2;
 
 /**
- * Per-character width as a fraction of the font size (`em`), by script class.
- *
- * MEASURED, THEN ROUNDED UP. `getComputedTextLength` in Chromium, drawing in
- * this exact font stack at weight 700, reports a 26-capital run at 0.693 em, a
- * lowercase run at 0.571 em, a digit run at 0.637 em, and the Arabic alphabet
- * at 0.647 em. Every constant here is at or ABOVE its measurement, because the
+ * Per-character width as a fraction of the font size (`em`), by script class —
+ * the FALLBACK for a code point whose own width was not measured. Every
+ * constant here is at or ABOVE the widest measurement of its class, because the
  * estimate must be conservative (rule (5)): a run this function accepts must
  * not overflow when a browser finally measures it.
+ *
+ * MEASURED ACROSS THE WHOLE CHARACTER SET, NOT PER LETTER. The widths were
+ * taken with Chromium's `getComputedTextLength` / canvas `measureText` at
+ * 100 px, at BOTH weights 400 and 700, over EVERY font of {@link
+ * ARABIC_FONT_STACK} that resolves on the measurement box (Tahoma, Segoe UI,
+ * Arial — `Noto Naskh Arabic` and `Amiri` are not installed there, so the stack
+ * falls through to Tahoma for Arabic and the widest of the three for Latin),
+ * and the MAXIMUM of all of them was kept per code point. Enumerating a handful
+ * of letters is exactly how a width bug survived two rounds: `W` measures 1.028
+ * em and `M` 0.958 em on Tahoma at weight 700 (Segoe UI: 1.005 / 0.958; Arial:
+ * 0.944 / 0.833), and several further capitals (`N` 0.790, `G/H/K/O/Q` 0.778,
+ * `D` 0.757) and symbols (`%` 1.199, `@` 1.016, `&` 0.850) exceed the old 0.75
+ * / 0.66 / 0.80 constants too. Every measured code point above its class floor
+ * now lives in {@link MEASURED_EM}, so nothing measured is under-read and the
+ * per-class constants below only ever serve a code point that was NOT measured.
  *
  * THE FOUR WIDEST ARABIC LETTERS ARE MEASURED AS WIDEST FORMS, NOT AVERAGED.
  * Connected Arabic has no single glyph width, so a per-run average is right for
  * a mixed name — but the four letters `س ش ص ض` are wide EVEN WHEN CONNECTED.
- * Measured in the label's font stack (Tahoma, the deployment target's Arabic
- * face), /100px: an isolated `س`/`ش` is 1.402 em and an isolated `ص`/`ض` is
- * 1.421 em; a fully connected run `سشصض` still averages 1.178 em per
- * character. Averaging them into the 0.647 em alphabet figure under-read a name
- * built from them by more than a factor of two — such a name rendered ~15 mm
- * off a 46 mm band, i.e. CLIPPED. They therefore take their own constant,
- * {@link GLYPH_EM.arabicWide}: 1.45 em, the widest measured form (1.421 em)
- * rounded up with ~2% of head-room. Every other Arabic letter keeps the
- * alphabet AVERAGE, which is what a real (mixed) name resembles.
+ * Measured in the label's font stack, /100px: an isolated `س`/`ش` is 1.402 em
+ * and an isolated `ص`/`ض` is 1.421 em; a fully connected run `سشصض` still
+ * averages 1.178 em per character. Averaging them into the 0.647 em alphabet
+ * figure under-read a name built from them by more than a factor of two — such
+ * a name rendered ~15 mm off a 46 mm band, i.e. CLIPPED. They therefore take
+ * their own constant, {@link GLYPH_EM.arabicWide}: 1.45 em, the widest measured
+ * form (1.421 em) rounded up with ~2% of head-room. Every other Arabic letter
+ * keeps the alphabet AVERAGE (0.75 em), which is what a real (mixed, CONNECTED)
+ * name resembles; the widest measured connected run of any other letter
+ * (`ج/ح/خ`) averages 0.754 em, inside the 0.97 truncation head-room.
+ *
+ * OVER-ESTIMATION IS DELIBERATE. `arabic` deliberately stays a connected-run
+ * AVERAGE rather than each letter's (much wider) isolated width: a lone letter
+ * can never fill a 46 mm band, only a long connected run can, so the average is
+ * conservative where it matters and ordinary Arabic is estimated ~20-30% early.
+ * That is the SAFE direction — a name cut short is readable; a name clipped off
+ * the label is not — and the constants are NOT relaxed to win characters back.
  */
 export const GLYPH_EM = {
-  /** Arabic letters (both names are Arabic). */
+  /** Arabic letters (both names are Arabic) in their connected-run average. */
   arabic: 0.75,
   /**
    * The four widest Arabic letters — `س` (U+0633), `ش` (U+0634), `ص` (U+0635),
@@ -145,21 +168,76 @@ export const GLYPH_EM = {
    * 1.402-1.421 em and their connected run 1.178 em; 1.45 em covers both.
    */
   arabicWide: 1.45,
-  /** Latin capitals `A-Z` (bold). */
+  /**
+   * Arabic PRESENTATION FORMS (`U+FB50-U+FDFF`, `U+FE70-U+FEFF`) — single
+   * glyphs that stand for a letter or a whole word. Measured up to 1.905 em for
+   * a two-letter ligature and 6.881 em for `U+FDFD` (the Bismillah ligature),
+   * so a letter-level constant cannot cover them; 2.0 em clears every one but
+   * the one phrase-ligature kept in {@link MEASURED_EM}.
+   */
+  arabicPresentation: 2.0,
+  /** Latin capitals `A-Z` (bold) — the floor for one NOT in {@link MEASURED_EM}. */
   latinUpper: 0.75,
-  /** Latin lowercase `a-z`. */
+  /** Latin lowercase `a-z` — the floor for one NOT in {@link MEASURED_EM}. */
   latinLower: 0.66,
-  /** Digits `0-9` (bold). */
+  /** Digits `0-9` (bold) — measured 0.637 em. */
   digit: 0.68,
-  /** The ASCII hyphen in a `PREFIX-SEQ`. */
+  /** The ASCII hyphen in a `PREFIX-SEQ` — measured 0.431 em. */
   hyphen: 0.47,
-  /** A space or a non-breaking space. */
+  /** A space or a non-breaking space — measured 0.313 em. */
   space: 0.33,
-  /** The `…` a truncated run is closed with. */
+  /** The `…` a truncated run is closed with — measured 1.000 em. */
   ellipsis: 1.05,
-  /** Anything else — punctuation, `·`, an astral character. */
+  /** Anything else — an astral character, an unmeasured symbol. */
   other: 0.8,
 } as const;
+
+/**
+ * Measured per-character widths that EXCEED their class fallback above, keyed by
+ * code point, as a fraction of the font size (`em`).
+ *
+ * Every value is the MAXIMUM Chromium reported for that code point across the
+ * label's resolving font stack at weights 400 and 700 (see the {@link GLYPH_EM}
+ * note), rounded UP to three decimals. The whole printable-ASCII range, the
+ * digits, the punctuation the label prints (`· - : …`), the Arabic base block
+ * and its supplements, and the Arabic presentation forms were all measured; only
+ * the code points below came out wider than the fallback, so only they need an
+ * entry — the fallbacks already cover everything else. Raw maxima, /100 px:
+ *
+ *   `W` 102.783 · `M` 95.703 · `N` 79.004 · `G/H/K/O/Q` 77.783 · `D` 75.732
+ *   `m` 95.361 · `w` 88.965 · `%` 119.873 · `@` 101.514 · `&` 84.961
+ *   `# + < = > ^ ~` 81.836 · `×` (U+00D7) 81.836 · `—` (U+2014) 100.0
+ *   (nearest value left on the class floor: `B/V/X/Y` 72.217 · `h/n/u` 64.014 · digits 63.672)
+ *
+ * `U+FDFD` is the one Arabic presentation-form glyph wider than {@link
+ * GLYPH_EM.arabicPresentation}; it is a single glyph for a whole phrase.
+ */
+export const MEASURED_EM: Readonly<Record<number, number>> = {
+  0x23: 0.819, // '#'
+  0x25: 1.199, // '%'
+  0x26: 0.85, // '&'
+  0x2b: 0.819, // '+'
+  0x3c: 0.819, // '<'
+  0x3d: 0.819, // '='
+  0x3e: 0.819, // '>'
+  0x40: 1.016, // '@'
+  0x44: 0.757, // 'D'
+  0x47: 0.778, // 'G'
+  0x48: 0.778, // 'H'
+  0x4b: 0.778, // 'K'
+  0x4d: 0.958, // 'M'
+  0x4e: 0.79, // 'N'
+  0x4f: 0.778, // 'O'
+  0x51: 0.778, // 'Q'
+  0x57: 1.028, // 'W'
+  0x5e: 0.819, // '^'
+  0x6d: 0.954, // 'm'
+  0x77: 0.89, // 'w'
+  0x7e: 0.819, // '~'
+  0xd7: 0.819, // '×'
+  0x2014: 1.0, // '—'
+  0xfdfd: 6.881, // the Bismillah ligature
+};
 
 /**
  * The widest Arabic letters, whose CONNECTED forms are still far wider than the
@@ -180,19 +258,36 @@ function isArabic(cp: number): boolean {
   );
 }
 
-/** The `em` width of one code point, by its script class. */
-function charEm(cp: number): number {
+/** The `em` width of one code point from its script class alone (no measurement). */
+function charBlockEm(cp: number): number {
   if (cp >= 48 && cp <= 57) return GLYPH_EM.digit;
   if (cp >= 65 && cp <= 90) return GLYPH_EM.latinUpper;
   if (cp >= 97 && cp <= 122) return GLYPH_EM.latinLower;
   if (cp === 32 || cp === 0x00a0) return GLYPH_EM.space;
   if (cp === 45) return GLYPH_EM.hyphen;
   if (cp === 0x2026) return GLYPH_EM.ellipsis;
-  // The four widest Arabic letters (see the GLYPH_EM note) keep their WIDEST
-  // connected form; every other Arabic letter uses the alphabet average.
+  // The four widest Arabic letters keep their WIDEST connected form; every
+  // other Arabic letter uses the alphabet average.
   if (WIDE_ARABIC_CODEPOINTS.has(cp)) return GLYPH_EM.arabicWide;
   if (isArabic(cp)) return GLYPH_EM.arabic;
   return GLYPH_EM.other;
+}
+
+/**
+ * The `em` width of one code point: its class fallback, or its own measured
+ * maximum when that is wider (see {@link MEASURED_EM}). Keyed by code point and
+ * deliberately never below the fallback, so measuring MORE can only ever make
+ * the estimate wider — conservative, never a regression.
+ */
+function charEm(cp: number): number {
+  // Arabic presentation forms get a wide constant (they are whole-glyph
+  // ligatures, not letters) unless the one measured phrase-ligature is wider.
+  if ((cp >= 0xfb50 && cp <= 0xfdff) || (cp >= 0xfe70 && cp <= 0xfeff)) {
+    return Math.max(GLYPH_EM.arabicPresentation, MEASURED_EM[cp] ?? 0);
+  }
+  const measured = MEASURED_EM[cp];
+  const fallback = charBlockEm(cp);
+  return measured === undefined ? fallback : Math.max(fallback, measured);
 }
 
 /**
