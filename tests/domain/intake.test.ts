@@ -63,11 +63,15 @@ function variantStub(barcode: string): ItemVariant {
   } as ItemVariant;
 }
 
-/** The lookup the real screen performs: `findByBarcode` matches stored codes. */
+/**
+ * The lookup the real screen performs: `findByBarcode` matches stored codes AND
+ * returns the item's Arabic name alongside the variant ({@link resolveScan}'s
+ * `lookup` must agree with `findByBarcode` in shape).
+ */
 const storedLookup =
   (stored: string) =>
-  async (code: string): Promise<ItemVariant | null> =>
-    code === stored ? variantStub(stored) : null;
+  async (code: string): Promise<{ variant: ItemVariant; itemNameAr: string } | null> =>
+    code === stored ? { variant: variantStub(stored), itemNameAr: 'قميص قطني' } : null;
 
 // ---------------------------------------------------------------------------
 // (1) … (4), pure — no database.
@@ -96,6 +100,23 @@ test('a scan is normalised before lookup', async () => {
   assert.equal(found.kind, 'variant', 'a padded, lower-cased scan must still find its variant');
   if (found.kind === 'variant') {
     assert.equal(found.variant.barcode, 'AB-0012');
+  }
+});
+
+test('a resolved scan carries the product’s NAME, not just its code', async () => {
+  // A person holding a box at the door must confirm WHAT resolved: `AB-0012`
+  // alone does not tell them it is the shirt they ordered. The name travels on
+  // the scan result, alongside the variant, exactly as findByBarcode returns it.
+  const found = await resolveScan(' ab-0012 ', storedLookup('AB-0012'));
+
+  assert.equal(found.kind, 'variant', 'the scan must still resolve to a variant');
+  if (found.kind === 'variant') {
+    assert.equal(found.variant.barcode, 'AB-0012');
+    assert.equal(
+      found.itemNameAr,
+      'قميص قطني',
+      'the resolved scan must carry the item’s Arabic name, not only its code',
+    );
   }
 });
 
@@ -264,6 +285,46 @@ test('the screen finds a variant from a padded, lower-cased scan', { skip: !sqlT
 
     const unknown = await withTenant(db, t1, (tdb) => scanIn(tdb, token, 'AB-9999'));
     assert.deepEqual(unknown, { kind: 'unknown', code: 'AB-9999' });
+  });
+});
+
+test('scanning a real barcode names the product; an unknown or retired code does not', { skip: !sqlTestUrl() }, async () => {
+  const { t1, owner } = await provision();
+
+  await withDb(async (db) => {
+    const ctx = await withTenant(db, t1, (tdb) => setup(tdb, 'NAME'));
+    const token = await tokenFor(db, t1, owner);
+
+    // A scan that resolves must carry the item's Arabic name — the door person
+    // confirms WHAT arrived, not just a code.
+    const found = await withTenant(db, t1, (tdb) => scanIn(tdb, token, ` ab-${'NAME'} `));
+    assert.equal(found.kind, 'variant', 'the barcode must resolve');
+    if (found.kind === 'variant') {
+      assert.equal(found.variant.id, ctx.variantId);
+      assert.equal(found.itemNameAr, 'قميص', 'the scan must carry the item’s Arabic name');
+    }
+
+    // A code that matches nothing carries NO name — there is nothing to name.
+    const unknown = await withTenant(db, t1, (tdb) => scanIn(tdb, token, 'AB-9999'));
+    assert.deepEqual(
+      unknown,
+      { kind: 'unknown', code: 'AB-9999' },
+      'an unknown code must be exactly { kind, code } — no name smuggled on',
+    );
+
+    // A RETIRED product scans exactly like one that never existed: same answer,
+    // and no name — an unknown code and a deactivated one are indistinguishable.
+    await withTenant(db, t1, (tdb) =>
+      tdb.query('update items set active = false where id = (select item_id from item_variants where id = $1)', [
+        ctx.variantId,
+      ]),
+    );
+    const retired = await withTenant(db, t1, (tdb) => scanIn(tdb, token, ctx.barcode));
+    assert.deepEqual(
+      retired,
+      { kind: 'unknown', code: ctx.barcode },
+      'a retired product must scan as unknown with no name, like a code that never existed',
+    );
   });
 });
 

@@ -84,6 +84,8 @@ test('an unknown barcode returns null, never a new item', { skip: !sqlTestUrl() 
       const before = await tdb.query<{ n: number }>('select count(*)::int as n from items');
 
       const found = await findByBarcode(tdb, 'NOPE-1');
+      // A code that matched nothing carries NO name — there is nothing to name.
+      assert.equal(found?.itemNameAr, undefined, 'an unknown code must carry no item name');
       assert.equal(found, null, 'an unknown barcode must resolve to null, not throw and not insert');
 
       const after = await tdb.query<{ n: number }>('select count(*)::int as n from items');
@@ -108,9 +110,14 @@ test('a scanned barcode round-trips through findByBarcode, normalised on lookup'
       // A raw, lower-cased scan with stray spaces must still hit the stored row.
       const found = await findByBarcode(tdb, '  DR-001-M ');
       assert.ok(found, 'the normalised lookup must find the stored variant');
-      assert.equal(found.id, created.variant.id);
-      assert.equal(found.barcode, 'DR-001-M', 'the stored barcode is canonicalised');
-      assert.equal(found.sku, 'DR-001');
+      assert.equal(found.variant.id, created.variant.id);
+      assert.equal(found.variant.barcode, 'DR-001-M', 'the stored barcode is canonicalised');
+      assert.equal(found.variant.sku, 'DR-001');
+      assert.equal(
+        found.itemNameAr,
+        'فستان',
+        'the lookup carries the item’s Arabic name — a scan says WHAT resolved, not only its code',
+      );
     });
   });
 });
@@ -292,7 +299,8 @@ test('a deactivated item or variant scans as an unknown code', { skip: !sqlTestU
     await withTenant(db, t1, async (tdb) => {
       const found = await findByBarcode(tdb, 'BEL-1');
       assert.ok(found, 'an active item and variant must scan');
-      assert.equal(found.id, created.variant.id);
+      assert.equal(found.variant.id, created.variant.id);
+      assert.equal(found.itemNameAr, 'حزام', 'an active product names the item it resolved to');
     });
 
     // Deactivate the ITEM only.

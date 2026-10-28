@@ -13,7 +13,7 @@
     "db:check": "node scripts/db-check.mjs",
     "db:types": "node scripts/gen-types.mjs",
     "test": "node --import tsx --test tests/**/*.test.ts",
-    "ci": "tsc --noEmit && eslint . && npm test"
+    "ci": "node scripts/ci.mjs"
   },
   "keywords": [],
   "author": "",

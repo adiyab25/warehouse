@@ -59,12 +59,14 @@ export function canReceive(role: string | null | undefined): role is ReceivingRo
 }
 
 /**
- * What a scan resolved to: the variant it named, or the code that matched
- * nothing. `unknown` carries the NORMALISED code — the canonical form of what
- * was scanned, which is what a person can match against the printed barcode.
+ * What a scan resolved to: the variant it named (TOGETHER WITH the item's
+ * Arabic name, so the line can say WHAT resolved and not only its code), or the
+ * code that matched nothing. `unknown` carries the NORMALISED code — the
+ * canonical form of what was scanned, which is what a person can match against
+ * the printed barcode — and no name: there is nothing to name.
  */
 export type ScanResult =
-  | { kind: 'variant'; variant: ItemVariant }
+  | { kind: 'variant'; variant: ItemVariant; itemNameAr: string }
   | { kind: 'unknown'; code: string };
 
 /**
@@ -83,19 +85,21 @@ export type ScanResult =
  *
  * `lookup` is injected — the caller supplies `findByBarcode` over its own
  * tenant-scoped connection — which is what makes this testable without a
- * database and keeps this module free of one.
+ * database and keeps this module free of one. It returns `{ variant, itemNameAr }`
+ * (the same shape {@link findByBarcode} and {@link findVariantById} return), and
+ * this function carries the NAME through onto the resolved result.
  */
 export async function resolveScan(
   code: string,
-  lookup: (normalisedCode: string) => Promise<ItemVariant | null>,
+  lookup: (normalisedCode: string) => Promise<{ variant: ItemVariant; itemNameAr: string } | null>,
 ): Promise<ScanResult> {
   const normalised = normaliseScannedCode(typeof code === 'string' ? code : '');
   if (!isValidScannedCode(normalised)) return { kind: 'unknown', code: normalised };
 
-  const variant = await lookup(normalised);
-  if (!variant) return { kind: 'unknown', code: normalised };
+  const resolved = await lookup(normalised);
+  if (!resolved) return { kind: 'unknown', code: normalised };
 
-  return { kind: 'variant', variant };
+  return { kind: 'variant', variant: resolved.variant, itemNameAr: resolved.itemNameAr };
 }
 
 /** One line as the screen holds it, before anything is posted. */

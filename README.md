@@ -80,8 +80,11 @@ protection while every test still passed.
 npm run db:migrate   # apply every unapplied supabase/migrations/*.sql (as MIGRATE_DATABASE_URL / DATABASE_URL, the owner)
 npm run db:reset     # drop schema public and reapply everything (dev only, owner role)
 npm run db:check     # server version, schemas, applied migrations
-npm test             # node:test via tsx; DB tests are skipped without SQL_TEST_DATABASE_URL
-npm run ci           # tsc --noEmit + eslint . + npm test — the gate for every task
+npm test             # node:test via tsx; DB tests are skipped without SQL_TEST_DATABASE_URL (and the run still exits 0)
+npm run ci           # the gate for every task: tsc --noEmit + eslint . + the full suite.
+                     # Unlike `npm test`, `ci` REQUIRES SQL_TEST_DATABASE_URL and
+                     # MIGRATE_DATABASE_URL (it refuses to run without them) AND fails if
+                     # any test was skipped — a suite that skips itself green is not a gate.
 ```
 
 Migrating twice is a no-op: each migration runs in its own transaction and is

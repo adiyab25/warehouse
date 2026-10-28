@@ -58,6 +58,8 @@ export interface IntakeScreenProps {
 /** One scanned line as the screen holds it — the quantities are TYPED text. */
 interface ScreenLine {
   variantId: string;
+  /** The item's Arabic name — WHAT resolved, so the person can confirm it. */
+  nameAr: string;
   /** The scannable code, shown left-to-right. */
   code: string;
   /** Size / colour / any attribute that tells two variants apart, if any. */
@@ -124,7 +126,8 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
   const [outcome, setOutcome] = useState<SubmitOutcome | null>(null);
 
   /** Adds a scanned line, or tops up the one already there. */
-  function addOrBumpLine(variant: { id: string; barcode: string; attrs: unknown }) {
+  function addOrBumpLine(resolved: { variant: { id: string; barcode: string; attrs: unknown }; itemNameAr: string }) {
+    const variant = resolved.variant;
     setLines((prev) => {
       const existing = prev.find((line) => line.variantId === variant.id);
       if (!existing) {
@@ -133,6 +136,7 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
           ...prev,
           {
             variantId: variant.id,
+            nameAr: resolved.itemNameAr,
             code: variant.barcode,
             detail: detailOf(variant.attrs),
             expected: one,
@@ -171,7 +175,7 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
         return;
       }
       setScanValue('');
-      addOrBumpLine(result.variant);
+      addOrBumpLine(result);
       setScanMessage({ kind: 'already', code: result.variant.barcode });
     } catch {
       setScanMessage({ kind: 'error', code: '' });
@@ -347,6 +351,9 @@ export function IntakeScreen({ sources, destName }: IntakeScreenProps) {
               {parsed.map((line) => (
                 <li key={line.variantId} className="intake-line">
                   <div className="intake-line-head">
+                    {/* WHAT resolved, in Arabic, right-aligned by the RTL document. */}
+                    <span className="intake-line-name">{line.nameAr}</span>
+                    {/* The machine-read code, kept left-to-right (.ltr-value). */}
                     <span className="ltr-value intake-line-code">{line.code}</span>
                     {line.detail ? <span className="intake-line-detail">{line.detail}</span> : null}
                   </div>

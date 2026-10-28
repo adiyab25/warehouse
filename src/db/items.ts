@@ -162,25 +162,34 @@ export async function createItem(
 }
 
 /**
- * Looks a variant up by its scanned code, scoped to the current tenant.
+ * Looks a variant up by its scanned code, scoped to the current tenant, and
+ * returns the variant TOGETHER WITH the item's Arabic name.
  *
  * The code is normalised first (trimmed and upper-cased), so a scan that
  * arrived padded or lower-cased still matches the canonical row. A code that
  * matches nothing returns `null` — this is a pure read and NEVER creates an
  * item, which is what keeps a mistyped barcode from minting a row.
  *
+ * The NAME comes back with the variant, from ONE query, exactly as
+ * {@link findVariantById} returns it: a person at the door confirms WHAT
+ * resolved, and `AB-0012` alone does not tell them it is the shirt they ordered.
+ * The two readers therefore agree in shape — `{ variant, itemNameAr }`.
+ *
  * A DEACTIVATED item or variant resolves to `null` too: Review Focus #1 says a
- * label that has been turned off must behave exactly like an unknown code. The
- * query joins `items` and requires BOTH `items.active` and
- * `item_variants.active`, so turning either off hides the scan without deleting
- * a row (and without inventing a distinct error the callers would have to
- * handle).
+ * label that has been turned off must behave exactly like an unknown code, and
+ * it must therefore return NO name either. The query joins `items` and requires
+ * BOTH `items.active` and `item_variants.active`, so turning either off hides
+ * the scan without deleting a row (and without inventing a distinct error the
+ * callers would have to handle).
  *
  * Call it with the scoped `db` from inside `withTenant`.
  */
-export async function findByBarcode(db: Queryable, code: string): Promise<ItemVariant | null> {
-  const { rows } = await db.query<ItemVariant>(
-    `select v.*
+export async function findByBarcode(
+  db: Queryable,
+  code: string,
+): Promise<{ variant: ItemVariant; itemNameAr: string } | null> {
+  const { rows } = await db.query<ItemVariant & { item_name_ar: string }>(
+    `select v.*, i.name_ar as item_name_ar
        from item_variants v
        join items i
          on i.id = v.item_id
@@ -191,7 +200,11 @@ export async function findByBarcode(db: Queryable, code: string): Promise<ItemVa
         and v.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`,
     [normaliseScannedCode(code)],
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+
+  const { item_name_ar: itemNameAr, ...variant } = row;
+  return { variant, itemNameAr };
 }
 
 /**

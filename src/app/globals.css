@@ -173,6 +173,14 @@ p[role="alert"] {
   font-weight: 700;
 }
 
+/* WHAT resolved: the item's Arabic name, on its own line so the door person
+ * reads the product first and the code underneath. Right-aligned by the RTL
+ * document; the machine-read code stays LTR via .ltr-value. */
+.intake-line-name {
+  flex: 1 0 100%;
+  font-weight: 600;
+}
+
 .intake-line-detail {
   color: var(--muted);
 }
