@@ -1,0 +1,6 @@
+sku,name_ar,family,uom,pack_factor,cost_egp,location_code,qty
+PEN-0001,قلم حبر أزرق,consumable,unit,12,5.50,MAIN,240
+PEN-0001,قلم حبر أزرق,consumable,unit,12,5.50,BR1,36
+PPR-0001,ورق تصوير A4,consumable,ream,5,120.50,MAIN,40
+RIC-0001,أرز مصري,sellable,kg,25,32.75,MAIN,150.5
+CHR-0001,كرسي مكتب,asset,unit,1,950.00,MAIN,12

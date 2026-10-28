@@ -13,7 +13,8 @@
     "db:check": "node scripts/db-check.mjs",
     "db:types": "node scripts/gen-types.mjs",
     "test": "node --import tsx --test tests/**/*.test.ts",
-    "ci": "node scripts/ci.mjs"
+    "ci": "node scripts/ci.mjs",
+    "import:opening": "node --import tsx scripts/import-opening.mjs"
   },
   "keywords": [],
   "author": "",
