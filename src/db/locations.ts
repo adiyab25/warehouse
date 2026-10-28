@@ -230,6 +230,34 @@ export async function findLocationById(db: Queryable, id: string): Promise<Locat
 }
 
 /**
+ * Returns the locations goods may be received FROM — the tenant's active
+ * `vendor` locations (the factory, the supplier), ordered by code.
+ *
+ * INTAKE NAMES A SOURCE; it is not derived. One warehouse feeds fourteen
+ * branches, so the destination is settled (see {@link warehouseLocation}), but
+ * a delivery can come from any of several factories or suppliers, and which one
+ * is a fact about THIS lorry that only the person at the door knows. The screen
+ * therefore offers exactly these as a list rather than inventing a source or
+ * leaving `source_location_id` to chance — a receipt is a TRANSFER, and a
+ * transfer with no origin would move stock into the warehouse from nowhere.
+ *
+ * An empty list is a real, meaningful answer: no vendor location exists yet, so
+ * nothing can be received until one is created. The list is never padded with a
+ * placeholder. Call it with the scoped `db` from inside `withTenant`.
+ */
+export async function vendorLocations(db: Queryable): Promise<Location[]> {
+  const { rows } = await db.query<Location>(
+    `select *
+       from locations
+      where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        and type = 'vendor'
+        and active
+      order by code`,
+  );
+  return rows;
+}
+
+/**
  * Returns the tenant's warehouse location — the ONE source stock is issued FROM.
  *
  * A requisition names the BRANCH it is for, not the warehouse it draws from
@@ -243,6 +271,27 @@ export async function findLocationById(db: Queryable, id: string): Promise<Locat
  * needs it, and a second private copy would drift.
  */
 export async function warehouseLocation(db: Queryable): Promise<Location> {
+  const row = await findWarehouseLocation(db);
+  if (!row) {
+    throw new Error(
+      'warehouseLocation: no active warehouse location for this tenant to issue from',
+    );
+  }
+  return row;
+}
+
+/**
+ * The tenant's active warehouse location, or `null` when it has none.
+ *
+ * The nullable half of {@link warehouseLocation}, for a caller whose job is to
+ * DESCRIBE the deployment rather than to move stock: the intake screen shows
+ * where the goods will arrive (auto-filled — the system knows its own
+ * warehouse), and "there is no warehouse yet" is a condition it must render,
+ * not an error it must throw. The writer still calls {@link warehouseLocation},
+ * which refuses to post from nowhere. Call it with the scoped `db` from inside
+ * `withTenant`.
+ */
+export async function findWarehouseLocation(db: Queryable): Promise<Location | null> {
   const { rows } = await db.query<Location>(
     `select *
        from locations
@@ -252,11 +301,5 @@ export async function warehouseLocation(db: Queryable): Promise<Location> {
       order by code
       limit 1`,
   );
-  const row = rows[0];
-  if (!row) {
-    throw new Error(
-      'warehouseLocation: no active warehouse location for this tenant to issue from',
-    );
-  }
-  return row;
+  return rows[0] ?? null;
 }

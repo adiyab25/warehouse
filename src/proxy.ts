@@ -25,8 +25,9 @@ import { SIGN_IN_PATH } from './app/sign-in/contract';
  *
  * WHAT IT DOES NOT MATCH: the sign-in page, the sign-out route, and Next's own
  * assets. The matcher is deliberately an ALLOW-LIST of the routes that need a
- * session (`/`) rather than a deny-list, so a route added later is protected by
- * default instead of silently public.
+ * session (`/`, `/intake`) rather than a deny-list, so a route added later is
+ * protected by default instead of silently public. (`/intake` was added to this
+ * list with Task 13's screen: the cheap half of the gate must cover it too.)
  */
 export function proxy(request: NextRequest): NextResponse {
   const hasSessionCookie = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -39,5 +40,5 @@ export function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ['/'],
+  matcher: ['/', '/intake'],
 };

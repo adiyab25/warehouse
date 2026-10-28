@@ -39,6 +39,7 @@
   --surface: #ffffff;
   --field-surface: #ffffff;
   --text: #1b1b1b;
+  --muted: #5a5a5a;
   --field-border: #8a8a8a;
   --accent: #1a5fb4; /* the ONE accent colour */
   --danger-text: #b3261e;
@@ -117,4 +118,138 @@ input[type="submit"]:focus-visible {
 /* A failed sign-in reads as a problem, not as body copy. */
 p[role="alert"] {
   color: var(--danger-text);
+}
+
+/*
+ * THE INTAKE DOOR (Task 13) — a handful of rules, and NO field styling.
+ *
+ * Same discipline as the controls above: the look lives HERE, once, so the
+ * screen can be restyled without touching a component. Nothing below touches
+ * `input`, `select` or `button`, which keep the shared rules; these are layout
+ * and the one thing that must shout — a difference between what the delivery
+ * note said and what is actually on the lorry. The screen is used standing up,
+ * one-handed, on a phone, so the column stays narrow, the primary action is
+ * full width, and every warning is a word, not a colour alone (the text is
+ * already translated).
+ */
+
+.field-hint {
+  display: block;
+  margin-block: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.intake-section {
+  margin-block: 1.25rem;
+}
+
+.intake-dest {
+  font-weight: 600;
+  margin-block: 0.25rem;
+}
+
+.intake-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.intake-line {
+  border: 1px solid var(--field-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-block: 0.75rem;
+}
+
+.intake-line-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.intake-line-code {
+  font-weight: 700;
+}
+
+.intake-line-detail {
+  color: var(--muted);
+}
+
+.intake-line-quantities {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.intake-qty {
+  flex: 1;
+  margin-block: 0.5rem;
+}
+
+/* A secondary action: outlined, never competing with "post the receipt". */
+.intake-remove {
+  color: var(--danger-text);
+  background-color: transparent;
+  border: 1px solid var(--danger-text);
+}
+
+.intake-problem {
+  color: var(--danger-text);
+}
+
+.duplicate-warning {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+/* The variance block: a difference between expected and received. */
+.variance-block {
+  border: 1px solid var(--danger-text);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-block: 1.25rem;
+}
+
+.variance-heading {
+  margin-block: 0 0.5rem;
+  font-size: 1rem;
+  color: var(--danger-text);
+}
+
+.variance-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.variance-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.variance-code {
+  font-weight: 600;
+}
+
+.variance-warning {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+/* Goods that have NOT arrived are not a shortage — stated, not shouted. */
+.variance-line-pending {
+  color: var(--muted);
+}
+
+.intake-submit {
+  width: 100%;
+  margin-block: 1rem;
+}
+
+.intake-posted {
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
 }

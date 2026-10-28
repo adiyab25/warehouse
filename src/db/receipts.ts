@@ -14,6 +14,22 @@ export type ReceiptLineRow = ReceiptLine;
 
 /** The input {@link createReceipt} accepts; `db` supplies the tenant. */
 export interface CreateReceiptInput {
+  /**
+   * OPTIONAL: the id this receipt must carry.
+   *
+   * A caller that opens a FORM mints one uuid when the form appears and sends
+   * it back on every submit, so the whole create-then-post is idempotent: a
+   * double-tap or a lost response re-uses the SAME receipt — whose per-line
+   * movements are keyed on the receipt id — instead of racing a second receipt
+   * into existence and posting the goods twice. A caller with nothing to key on
+   * omits it and the database generates one, exactly as before.
+   *
+   * A receipt with this id that ALREADY EXISTS is returned UNCHANGED and its
+   * lines are NOT rewritten — the retry of a form, not a fresh document. Use a
+   * NEW id for a genuinely new delivery; re-using an id with different lines is
+   * a bug, and this is not the place to guess what was meant.
+   */
+  id?: string;
   /** The factory/vendor location the goods come FROM. */
   sourceLocationId: string;
   /** The location they arrive at — normally the warehouse. */
@@ -102,14 +118,30 @@ export async function createReceipt(db: Queryable, input: CreateReceiptInput): P
   }
 
   const { rows } = await db.query<Receipt>(
-    `insert into receipts (tenant_id, source_location_id, dest_location_id, ref_no)
-     values (${TENANT}, $1, $2, $3)
+    `insert into receipts (id, tenant_id, source_location_id, dest_location_id, ref_no)
+     values (coalesce($4::uuid, gen_random_uuid()), ${TENANT}, $1, $2, $3)
+     on conflict (id) do nothing
      returning *`,
-    [input.sourceLocationId, input.destLocationId, refNo],
+    [input.sourceLocationId, input.destLocationId, refNo, input.id ?? null],
   );
 
-  const receipt = rows[0];
-  if (!receipt) throw new Error('createReceipt: no receipt row returned');
+  let receipt = rows[0];
+  if (!receipt) {
+    // No row came back, so the insert was swallowed by the id conflict: this
+    // receipt ALREADY EXISTS and this call is the retry of a form. Return it as
+    // it stands — its lines are NOT rewritten (they are the ones the first
+    // submit wrote), which is what makes a double-tap collapse to ONE receipt.
+    const { rows: existing } = await db.query<Receipt>('select * from receipts where id = $1', [
+      input.id ?? null,
+    ]);
+    receipt = existing[0];
+    if (!receipt) {
+      throw new Error(
+        `createReceipt: receipt ${input.id} already exists but is not visible to this tenant`,
+      );
+    }
+    return receipt;
+  }
 
   for (const line of input.lines) {
     await db.query(
@@ -305,11 +337,17 @@ export async function postReceipt(
  * The EARLIEST-posted OTHER receipt in this tenant carrying the same normalised
  * delivery-note number, if any. `null` when the note is blank or no other
  * receipt has posted it. A reportable warning, never a block.
+ *
+ * EXPORTED because the intake screen must surface the warning BEFORE the goods
+ * are accepted — a manager at the door with a lorry decides whether to take the
+ * delivery — and that pre-check must ask exactly the question the post asks.
+ * `excludeReceiptId` is the receipt doing the asking; pass `null` when there is
+ * none yet (the screen's pre-check runs before the receipt exists).
  */
-async function findPostedDuplicate(
+export async function findPostedDuplicate(
   db: Queryable,
   refNo: string | null,
-  excludeReceiptId: string,
+  excludeReceiptId: string | null,
 ): Promise<ReceiptDuplicate | null> {
   if (refNo == null) return null;
   const { rows } = await db.query<{ id: string; received_at: Date | null }>(
@@ -318,7 +356,7 @@ async function findPostedDuplicate(
       where tenant_id = ${TENANT}
         and ref_no = $1
         and status = 'posted'
-        and id <> $2
+        and ($2::uuid is null or id <> $2)
       order by received_at asc nulls last
       limit 1`,
     [refNo, excludeReceiptId],

@@ -203,6 +203,10 @@ test('a key used in the app but missing from the dictionaries is detectable', ()
     'src/app/sign-in/page.tsx',
     'src/app/sign-in/contract.ts',
     'src/app/sign-out/route.ts',
+    'src/app/intake/page.tsx',
+    'src/components/IntakeScreen.tsx',
+    'src/components/ExpectedVsReceived.tsx',
+    'src/components/ScanField.tsx',
     'src/proxy.ts',
     'src/i18n/index.ts',
   ];
