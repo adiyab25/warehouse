@@ -58,8 +58,8 @@ jobs:
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
           alter role authenticated login;
           grant usage, create on schema public, auth, extensions to authenticated;
-          grant all on all tables in schema public to authenticated;
-          alter default privileges in schema public grant all on tables to authenticated;
+          grant select, insert, update, delete on all tables in schema public to authenticated;
+          alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
           SQL
         env:
           PGPASSWORD: postgres
