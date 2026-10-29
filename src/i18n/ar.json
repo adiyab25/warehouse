@@ -184,5 +184,14 @@
   "reports.error.unauthenticated": "انتهت الجلسة. سجّل الدخول من جديد.",
   "reports.error.forbidden": "تقرير التزويد متاح للمخزن وللفرع المصرّح له فقط.",
   "reports.error.invalid": "حسابك غير مرتبط بفرع، فلا يوجد ما يُعرض. راجع المسؤول.",
-  "reports.back": "الرئيسية"
+  "reports.back": "الرئيسية",
+  "home.dashboard.owner.stock_lines": "سطور المخزون",
+  "home.dashboard.owner.below_min": "أقل من الحد الأدنى",
+  "home.dashboard.owner.open_requests": "الطلبات المفتوحة",
+  "home.dashboard.owner.in_transit": "قيد الترانزيت",
+  "home.dashboard.manager.to_approve": "للموافقة",
+  "home.dashboard.manager.to_issue": "للإصدار",
+  "home.dashboard.manager.receipts_receiving": "استلامات قيد الاستلام",
+  "home.dashboard.branch.my_requests": "طلباتي المفتوحة",
+  "home.dashboard.branch.to_confirm": "للتأكيد"
 }
