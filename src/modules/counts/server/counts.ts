@@ -94,8 +94,8 @@ export async function openCount(db: Queryable, input: OpenCountInput): Promise<C
   requireNonEmpty(input.startedBy, 'startedBy', 'openCount');
 
   const { rows } = await db.query<CountSession>(
-    `insert into count_sessions (tenant_id, location_id, started_by)
-     values (${TENANT}, $1, $2)
+    `insert into count_sessions (tenant_id, location_id, started_by, number)
+     values (${TENANT}, $1, $2, next_doc_number('count'))
      returning *`,
     [input.locationId, input.startedBy],
   );

@@ -333,8 +333,8 @@ test('a receipt line for another tenant is refused', { skip: !sqlTestUrl() }, as
       () =>
         withTenant(db, t1, (tdb) =>
           tdb.query(
-            `insert into receipts (tenant_id, source_location_id, dest_location_id)
-             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2)`,
+            `insert into receipts (tenant_id, source_location_id, dest_location_id, number)
+             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, 'RCV-2026-9999')`,
             [a.source.id, b.warehouse.id],
           ),
         ),
@@ -366,8 +366,8 @@ test('a raw insert of a non-normalised ref_no is refused', { skip: !sqlTestUrl()
       await assert.rejects(
         () =>
           tdb.query(
-            `insert into receipts (tenant_id, source_location_id, dest_location_id, ref_no)
-             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, ' dn-7 ')`,
+            `insert into receipts (tenant_id, source_location_id, dest_location_id, ref_no, number)
+             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, ' dn-7 ', 'RCV-2026-9999')`,
             [ctx.source.id, ctx.warehouse.id],
           ),
         /check constraint|receipts_ref_no_normalised_check/i,

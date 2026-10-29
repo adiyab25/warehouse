@@ -118,8 +118,8 @@ export async function createReceipt(db: Queryable, input: CreateReceiptInput): P
   }
 
   const { rows } = await db.query<Receipt>(
-    `insert into receipts (id, tenant_id, source_location_id, dest_location_id, ref_no)
-     values (coalesce($4::uuid, gen_random_uuid()), ${TENANT}, $1, $2, $3)
+    `insert into receipts (id, tenant_id, source_location_id, dest_location_id, ref_no, number)
+     values (coalesce($4::uuid, gen_random_uuid()), ${TENANT}, $1, $2, $3, next_doc_number('receipt'))
      on conflict (id) do nothing
      returning *`,
     [input.sourceLocationId, input.destLocationId, refNo, input.id ?? null],

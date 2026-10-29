@@ -451,8 +451,8 @@ test('a requisition line for another tenant is refused', { skip: !sqlTestUrl() }
       () =>
         withTenant(db, t1, (tdb) =>
           tdb.query(
-            `insert into requisitions (tenant_id, branch_location_id, requested_by)
-             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2)`,
+            `insert into requisitions (tenant_id, branch_location_id, requested_by, number)
+             values (nullif(current_setting('app.tenant_id', true), '')::uuid, $1, $2, 'REQ-2026-9999')`,
             [b.branch.id, u1],
           ),
         ),

@@ -107,8 +107,8 @@ export async function createRequisition(
   }
 
   const { rows } = await db.query<Requisition>(
-    `insert into requisitions (tenant_id, branch_location_id, requested_by, notes)
-     values (${TENANT}, $1, $2, $3)
+    `insert into requisitions (tenant_id, branch_location_id, requested_by, notes, number)
+     values (${TENANT}, $1, $2, $3, next_doc_number('requisition'))
      returning *`,
     [input.branchLocationId, input.requestedBy, input.notes ?? null],
   );
