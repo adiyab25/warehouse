@@ -22,6 +22,6 @@ Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/ag
 1. `docs/architecture/MAP.md` — every module, its files, tables, routes, tests, and the import rules.
 2. `docs/plan/ACTION-PLAN.md` — phases and tickets (each ticket = one GitHub issue).
 3. `docs/agents/ORCHESTRATION.md` — ticket packet, Definition of Done, review prompts, parallel-work rules.
-4. `docs/design/DESIGN-DIRECTION.md` (until `DESIGN.md` exists) — how the UI looks; UI is shadcn/ui (`src/components/ui`, RTL on) on Tailwind v4. Use the `impeccable` skill for design work.
+4. `DESIGN.md` (root) — visual design system (tokens, components, do's/don'ts). `PRODUCT.md` (root) — product context (users, purpose, constraints). `docs/design/DESIGN-DIRECTION.md` (legacy, until DESIGN.md existed). UI is shadcn/ui (`src/components/ui`, RTL on) on Tailwind v4. Use the `impeccable` skill for design work.
 
 Gate before any PR: `npm run ci` (tsc + eslint + all tests, 0 skipped). Ledger changes also run `npm run e2e -- --no-http`.
