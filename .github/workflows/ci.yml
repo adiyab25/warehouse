@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # trust so the passwordless urls the gate expects (owner `postgres`, and
+          # the app/test role `authenticated`, which bootstrap creates WITHOUT a
+          # password) connect exactly as they do in README.md "One-time database
+          # setup" — no credential in the url, no credential in the repo.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # The THREE role-separated urls, matching README.md / .env.example exactly.
+    # A CI that migrates AND tests as the same superuser proves nothing about RLS:
+    # the migration runner must connect as the OWNER (`postgres`) and every test
+    # and the app must connect as the non-owner `authenticated` role.
+    env:
+      DATABASE_URL: postgresql://postgres@localhost:5432/postgres
+      MIGRATE_DATABASE_URL: postgresql://postgres@localhost:5432/postgres
+      APP_DATABASE_URL: postgresql://authenticated@localhost:5432/postgres
+      SQL_TEST_DATABASE_URL: postgresql://authenticated@localhost:5432/postgres
+      TENANT_ID: 11111111-2222-3333-4444-555555555555
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Supabase bootstrap SQL
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f scripts/ci/bootstrap.sql
+        env:
+          PGPASSWORD: postgres
+
+      - name: Enable and grant the authenticated test/app role
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          alter role authenticated login;
+          grant usage, create on schema public, auth, extensions to authenticated;
+          grant all on all tables in schema public to authenticated;
+          alter default privileges in schema public grant all on tables to authenticated;
+          SQL
+        env:
+          PGPASSWORD: postgres
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migrations (as the owner role)
+        run: npm run db:migrate
+
+      # Build BEFORE the gate: `npm run ci` does NOT build, and the four
+      # session-gate HTTP tests (tests/e2e/session-gate.test.ts) skip themselves
+      # unless a production build is present (`.next/BUILD_ID`). The gate fails
+      # closed on ANY skip, so building first is what keeps it at 0 skipped. This
+      # reorders the plan, which listed `npm run ci` before `npx next build`.
+      - name: Build
+        run: npx next build
+
+      - name: Gate (tsc + eslint + full suite, 0 skipped)
+        run: npm run ci
+
+      # TODO(F-06): wire impeccable design-detect once it is CI-portable.
+      # The plan's `npx impeccable detect http://localhost:3000/sign-in --github`
+      # is NOT run: `impeccable` is a Hermes-local skill binary, not an
+      # installable npm CLI, and has no `detect` subcommand.
