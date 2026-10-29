@@ -48,8 +48,8 @@ role — a superuser bypasses row-level security, so a tenancy test run as
 ```bash
 echo "alter role authenticated login;" | /c/Workspace/pg/pgsql/bin/psql.exe
 echo "grant usage, create on schema public, auth, extensions to authenticated;
-      grant all on all tables in schema public to authenticated;
-      alter default privileges in schema public grant all on tables to authenticated;" \
+      grant select, insert, update, delete on all tables in schema public to authenticated;
+      alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;" \
   | /c/Workspace/pg/pgsql/bin/psql.exe
 ```
 
