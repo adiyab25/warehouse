@@ -1,7 +1,7 @@
-import { currentUser, type CurrentUser } from '../../auth/current-user.ts';
-import type { Queryable } from '../../db/client.ts';
-import { findByBarcode } from '../../db/items.ts';
-import { findWarehouseLocation, vendorLocations } from '../../db/locations.ts';
+import { currentUser, type CurrentUser } from '@/modules/auth/index';
+import type { Queryable } from '@/modules/platform/index';
+import { findByBarcode } from '@/modules/catalog/index';
+import { findWarehouseLocation, vendorLocations } from '@/modules/locations/index';
 import {
   createReceipt,
   findPostedDuplicate,
@@ -9,8 +9,8 @@ import {
   type Receipt,
   type ReceiptDuplicate,
   type ReceiptShortfall,
-} from '../../db/receipts.ts';
-import type { Location } from '../../db/types.ts';
+} from '@/modules/receiving/index';
+import type { Location } from '@/modules/platform/index';
 import {
   canReceive,
   receivedLines,
@@ -18,7 +18,7 @@ import {
   type IntakeRefusal,
   type ReceiptForm,
   type ScanResult,
-} from '../../domain/intake.ts';
+} from '@/modules/receiving/domain/intake';
 
 /**
  * The intake screen's LOGIC, with the request boundary left OUT.

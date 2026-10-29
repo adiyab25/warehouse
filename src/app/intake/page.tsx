@@ -1,12 +1,12 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { SESSION_COOKIE } from '../../auth/cookie';
-import { configuredTenantId } from '../../auth/tenant';
-import { IntakeScreen } from '../../components/IntakeScreen';
-import { getAppPool } from '../../db/app-pool';
-import { withTenant } from '../../db/client';
-import { canReceive } from '../../domain/intake';
+import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { configuredTenantId } from '@/modules/auth/index';
+import { IntakeScreen } from '@/modules/receiving/ui/IntakeScreen';
+import { getAppPool } from '@/modules/platform/index';
+import { withTenant } from '@/modules/platform/index';
+import { canReceive } from '@/modules/receiving/domain/intake';
 import { t } from '../../i18n';
 import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../sign-in/contract';

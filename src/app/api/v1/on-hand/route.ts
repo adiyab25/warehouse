@@ -1,6 +1,6 @@
-import { readRoute } from '../../../../api/read.ts';
-import { optText, optUuid, parseCursor, parseLimit } from '../../../../api/params.ts';
-import { listOnHand } from '../../../../db/read-api.ts';
+import { readRoute } from '@/modules/api/index';
+import { optText, optUuid, parseCursor, parseLimit } from '@/modules/api/domain/params';
+import { listOnHand } from '@/modules/api/index';
 
 /** GET /api/v1/on-hand — thin adapter; auth, scope, tenant and errors live in `readRoute`. */
 const route = readRoute((db, url) => {

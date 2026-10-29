@@ -2,11 +2,11 @@
 
 import { cookies } from 'next/headers';
 
-import { SESSION_COOKIE } from '../../auth/cookie.ts';
-import { configuredTenantId } from '../../auth/tenant.ts';
-import { getAppPool } from '../../db/app-pool.ts';
-import { withTenant } from '../../db/client.ts';
-import type { ReceiptForm } from '../../domain/intake.ts';
+import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { configuredTenantId } from '@/modules/auth/index';
+import { getAppPool } from '@/modules/platform/index';
+import { withTenant } from '@/modules/platform/index';
+import type { ReceiptForm } from '@/modules/receiving/domain/intake';
 import {
   IntakeError,
   checkNoteIn,

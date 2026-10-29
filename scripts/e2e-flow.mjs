@@ -40,16 +40,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import pg from 'pg';
 
-import { createAppPool } from '../src/db/app-pool.ts';
-import { issueClient } from '../src/db/api-clients.ts';
-import { withTenant } from '../src/db/client.ts';
-import { closeCount, openCount, recordCount } from '../src/db/counts.ts';
-import { createItem, findVariantById } from '../src/db/items.ts';
-import { createLocation } from '../src/db/locations.ts';
-import { movementHistory, onHand } from '../src/db/movements.ts';
-import { createReceipt, postReceipt } from '../src/db/receipts.ts';
-import { approve, confirmReceipt, createRequisition, issue } from '../src/db/requisitions.ts';
-import { returnRequisition } from '../src/db/returns.ts';
+import { createAppPool } from '../src/modules/platform/server/tenant-scope.ts';
+import { issueClient } from '../src/modules/api/server/api-clients.ts';
+import { withTenant } from '../src/modules/platform/server/db.ts';
+import { closeCount, openCount, recordCount } from '../src/modules/counts/server/counts.ts';
+import { createItem, findVariantById } from '../src/modules/catalog/server/items.ts';
+import { createLocation } from '../src/modules/locations/server/locations.ts';
+import { movementHistory, onHand } from '../src/modules/ledger/server/movements.ts';
+import { createReceipt, postReceipt } from '../src/modules/receiving/server/receipts.ts';
+import { approve, confirmReceipt, createRequisition, issue } from '../src/modules/requisitions/server/requisitions.ts';
+import { returnRequisition } from '../src/modules/returns/server/returns.ts';
 import { DEMO_TENANT_ID, seedTenant } from './seed.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

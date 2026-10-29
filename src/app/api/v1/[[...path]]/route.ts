@@ -1,4 +1,4 @@
-import { ApiError, errorResponse } from '../../../../api/errors.ts';
+import { ApiError, errorResponse } from '@/modules/api/domain/errors';
 
 /** Any unknown `/api/v1/*` path is a JSON 404 (the framework default is HTML). */
 const notFound = async (_req?: Request): Promise<Response> =>

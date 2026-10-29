@@ -1,6 +1,6 @@
-import { currentUser, type CurrentUser } from '../../auth/current-user.ts';
-import type { Queryable } from '../../db/client.ts';
-import { findVariantById } from '../../db/items.ts';
+import { currentUser, type CurrentUser } from '@/modules/auth/index';
+import type { Queryable } from '@/modules/platform/index';
+import { findVariantById } from '@/modules/catalog/index';
 import {
   MOVEMENT_HISTORY_LIMIT,
   ON_HAND_LIMIT,
@@ -11,9 +11,9 @@ import {
   type MovementDetail,
   type OnHandRow,
   type UsageRow,
-} from '../../db/usage.ts';
-import { canApproveOrIssue, canRequest } from '../../domain/requisition-ui.ts';
-import { isUuid } from '../../domain/ids.ts';
+} from '@/modules/branch-usage/index';
+import { canApproveOrIssue, canRequest } from '@/modules/requisitions/domain/requisition-ui';
+import { isUuid } from '@/modules/platform/domain/ids';
 
 /**
  * THE STOCK SCREENS' LOGIC, with the request boundary left OUT — the same seam

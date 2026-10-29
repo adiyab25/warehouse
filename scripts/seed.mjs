@@ -31,11 +31,11 @@ import { pathToFileURL } from 'node:url';
 
 import pg from 'pg';
 
-import { hashPassword } from '../src/auth/password.ts';
-import { createAppPool } from '../src/db/app-pool.ts';
-import { withTenant } from '../src/db/client.ts';
-import { setLocationLevel } from '../src/db/items.ts';
-import { escapeUnsafe, runOpeningImport } from '../src/import/opening.ts';
+import { hashPassword } from '../src/modules/auth/domain/password.ts';
+import { createAppPool } from '../src/modules/platform/server/tenant-scope.ts';
+import { withTenant } from '../src/modules/platform/server/db.ts';
+import { setLocationLevel } from '../src/modules/catalog/server/items.ts';
+import { escapeUnsafe, runOpeningImport } from '../src/modules/import-export/server/opening.ts';
 
 export const DEFAULT_NAME = 'Demo Kindergarten';
 export const DEMO_TENANT_ID = '11111111-2222-3333-4444-555555555555';

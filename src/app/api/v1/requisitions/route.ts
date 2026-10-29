@@ -1,7 +1,7 @@
-import { readRoute } from '../../../../api/read.ts';
-import { optEnum, optUuid, parseCursor, parseLimit } from '../../../../api/params.ts';
-import { listRequisitions } from '../../../../db/read-api.ts';
-import type { RequisitionStatus } from '../../../../domain/requisition.ts';
+import { readRoute } from '@/modules/api/index';
+import { optEnum, optUuid, parseCursor, parseLimit } from '@/modules/api/domain/params';
+import { listRequisitions } from '@/modules/api/index';
+import type { RequisitionStatus } from '@/modules/requisitions/domain/requisition';
 
 /** The closed state list (mirrors `requisitions_status_check`). */
 const REQUISITION_STATUSES = [

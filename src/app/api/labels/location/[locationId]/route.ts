@@ -1,4 +1,4 @@
-import { locationLabelResponse } from '../../handler.ts';
+import { locationLabelResponse } from '@/modules/catalog/index';
 
 /**
  * The printable LOCATION label, as an SVG — a barcode, the location's Arabic

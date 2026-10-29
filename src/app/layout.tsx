@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
-import { LanguageSwitcher } from '../components/LanguageSwitcher';
+import { LanguageSwitcher } from '@/modules/shell/ui/LanguageSwitcher';
 import { DIRECTION, t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 

@@ -25,7 +25,7 @@ import pg from 'pg';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
-const outFile = join(repoRoot, 'src', 'db', 'types.ts');
+const outFile = join(repoRoot, 'src', 'modules', 'platform', 'server', 'types.ts');
 
 // Bookkeeping tables are infrastructure, not domain rows — keep them out of the
 // generated API surface.
@@ -271,7 +271,7 @@ export const foreignKeys = ${fkLines} as const;
 `;
 
   writeFileSync(outFile, output);
-  console.log(`gen-types: wrote ${tableNames.length} table(s) to src/db/types.ts`);
+  console.log(`gen-types: wrote ${tableNames.length} table(s) to src/modules/platform/server/types.ts`);
 } finally {
   await client.end().catch(() => {});
 }
