@@ -8,6 +8,8 @@ import { REFUSAL_MESSAGE_KEYS, type IntakeRefusal, type ReceiptForm } from '../d
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
 import { ExpectedVsReceived, type ExpectedVsReceivedLine } from './ExpectedVsReceived';
 import { ScanField } from '@/modules/shell/ui/ScanField';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
 
 /**
  * THE INTAKE DOOR — the screen the warehouse manager stands in front of with a
@@ -255,7 +257,8 @@ export function IntakeScreen({ sources, destName, lang }: IntakeScreenProps) {
     .filter((code): code is string => code != null);
 
   return (
-    <div className="intake">
+    <div className="space-y-4">
+      <PageHeader title={t('intake.title', lang)} />
       <form onSubmit={(event) => event.preventDefault()}>
         <div className="intake-section">
           <label htmlFor="intake-note">{t('intake.note', lang)}</label>
@@ -343,7 +346,7 @@ export function IntakeScreen({ sources, destName, lang }: IntakeScreenProps) {
         <div className="intake-section">
           <h2>{t('intake.lines', lang)}</h2>
           {parsed.length === 0 ? (
-            <p className="field-hint">{t('intake.no_lines', lang)}</p>
+            <EmptyState title={t('intake.no_lines', lang)} />
           ) : (
             <ul className="intake-lines">
               {parsed.map((line) => (
