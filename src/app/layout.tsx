@@ -6,6 +6,11 @@ import { DIRECTION, t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 
 import './globals.css';
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+
 
 /**
  * The root layout — Arabic-first, with a per-user language override.
@@ -28,7 +33,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const lang = await getRequestLang();
   return (
-    <html lang={lang} dir={DIRECTION[lang]}>
+    <html lang={lang} dir={DIRECTION[lang]} className={cn("font-sans", geist.variable)}>
       <body>
         <header>
           <LanguageSwitcher lang={lang} />
