@@ -5,13 +5,13 @@
 > Workers know nothing except what the ticket packet gives them — so the packet must be complete.
 
 ## 1. Roles
-| Role | Does | Never does |
-|---|---|---|
-| **Lead** | Picks the next tickets from `ACTION-PLAN.md`, writes packets, dispatches, runs the two reviews, runs the gate, merges, updates the vault + docs | Write large features itself while workers are running in the same files |
-| **Builder** (worker) | Implements one ticket test-first on its own branch, runs the gate, reports | Touch files outside the ticket's *owned paths*; edit an applied migration; change another module's internals |
-| **Spec reviewer** (worker) | Checks the diff against the ticket's acceptance criteria and MAP rules | Rewrite the code |
-| **Quality reviewer** (worker) | Checks correctness, security (RLS, tenant, actor), tests that can fail, naming, i18n | Approve a ledger change without reading the SQL |
-| **Design reviewer** (worker, UI tickets) | Runs Impeccable `critique` + `audit` on the rendered screen, AR + EN, 390 + 1280 px | Judge from markup alone |
+| Role                                     | Does                                                                                                                                            | Never does                                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Lead**                                 | Picks the next tickets from `ACTION-PLAN.md`, writes packets, dispatches, runs the two reviews, runs the gate, merges, updates the vault + docs | Write large features itself while workers are running in the same files                                      |
+| **Builder** (worker)                     | Implements one ticket test-first on its own branch, runs the gate, reports                                                                      | Touch files outside the ticket's *owned paths*; edit an applied migration; change another module's internals |
+| **Spec reviewer** (worker)               | Checks the diff against the ticket's acceptance criteria and MAP rules                                                                          | Rewrite the code                                                                                             |
+| **Quality reviewer** (worker)            | Checks correctness, security (RLS, tenant, actor), tests that can fail, naming, i18n                                                            | Approve a ledger change without reading the SQL                                                              |
+| **Design reviewer** (worker, UI tickets) | Runs Impeccable `critique` + `audit` on the rendered screen, AR + EN, 390 + 1280 px                                                             | Judge from markup alone                                                                                      |
 
 ## 2. Ticket packet (the lead copies this into every dispatch)
 ```markdown
