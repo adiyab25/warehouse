@@ -6,10 +6,19 @@ import { DIRECTION, t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 
 import './globals.css';
-import { Geist } from "next/font/google";
+import { IBM_Plex_Sans_Arabic, IBM_Plex_Mono } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const plexSansArabic = IBM_Plex_Sans_Arabic({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-sans',
+});
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-mono',
+});
 
 
 /**
@@ -33,7 +42,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const lang = await getRequestLang();
   return (
-    <html lang={lang} dir={DIRECTION[lang]} className={cn("font-sans", geist.variable)}>
+    <html lang={lang} dir={DIRECTION[lang]} className={cn("font-sans", plexSansArabic.variable, plexMono.variable)}>
       <body>
         <header>
           <LanguageSwitcher lang={lang} />
