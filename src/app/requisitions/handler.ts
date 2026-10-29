@@ -1,13 +1,13 @@
-import { currentUser, type CurrentUser } from '../../auth/current-user.ts';
-import type { Queryable } from '../../db/client.ts';
-import { isUuid } from '../../domain/ids.ts';
+import { currentUser, type CurrentUser } from '@/modules/auth/index';
+import type { Queryable } from '@/modules/platform/index';
+import { isUuid } from '@/modules/platform/domain/ids';
 import {
   approve,
   confirmReceipt,
   createRequisition,
   issue,
   type RequisitionStatus,
-} from '../../db/requisitions.ts';
+} from '@/modules/requisitions/index';
 import {
   availableActions,
   canApproveOrIssue,
@@ -19,7 +19,7 @@ import {
   round3,
   type RequisitionActionSet,
   type RequisitionRefusal,
-} from '../../domain/requisition-ui.ts';
+} from '@/modules/requisitions/domain/requisition-ui';
 
 /**
  * The REQUISITION SCREENS' LOGIC, with the request boundary left OUT.

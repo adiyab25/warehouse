@@ -1,9 +1,9 @@
-import { postMovementRoute } from '../../../../api/movements-write.ts';
-import { readRoute } from '../../../../api/read.ts';
-import { writeRoute } from '../../../../api/write.ts';
-import { optEnum, optInstant, optUuid, parseCursor, parseLimit } from '../../../../api/params.ts';
-import { listMovements } from '../../../../db/read-api.ts';
-import { MOVEMENT_REASONS } from '../../../../domain/movement.ts';
+import { postMovementRoute } from '@/modules/api/index';
+import { readRoute } from '@/modules/api/index';
+import { writeRoute } from '@/modules/api/index';
+import { optEnum, optInstant, optUuid, parseCursor, parseLimit } from '@/modules/api/domain/params';
+import { listMovements } from '@/modules/api/index';
+import { MOVEMENT_REASONS } from '@/modules/ledger/domain/movement';
 
 /**
  * GET /api/v1/movements — "where did it go". Newest first by `seq` (NOT

@@ -1,4 +1,4 @@
-import { variantLabelResponse } from '../../handler.ts';
+import { variantLabelResponse } from '@/modules/catalog/index';
 
 /**
  * The printable VARIANT label, as an SVG — a barcode, the item's Arabic name,

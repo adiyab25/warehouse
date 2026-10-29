@@ -1,11 +1,11 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { SESSION_COOKIE } from '../../../auth/cookie';
-import { configuredTenantId } from '../../../auth/tenant';
-import { StockHistoryScreen } from '../../../components/StockHistoryScreen';
-import { getAppPool } from '../../../db/app-pool';
-import { withTenant } from '../../../db/client';
+import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { configuredTenantId } from '@/modules/auth/index';
+import { StockHistoryScreen } from '@/modules/ledger/ui/StockHistoryScreen';
+import { getAppPool } from '@/modules/platform/index';
+import { withTenant } from '@/modules/platform/index';
 import { t } from '../../../i18n';
 import { getRequestLang } from '../../../i18n/request';
 import { SIGN_IN_PATH } from '../../sign-in/contract';

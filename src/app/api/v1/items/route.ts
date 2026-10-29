@@ -1,6 +1,6 @@
-import { readRoute } from '../../../../api/read.ts';
-import { optEnum, parseCursor, parseLimit } from '../../../../api/params.ts';
-import { listItems } from '../../../../db/read-api.ts';
+import { readRoute } from '@/modules/api/index';
+import { optEnum, parseCursor, parseLimit } from '@/modules/api/domain/params';
+import { listItems } from '@/modules/api/index';
 
 /** GET /api/v1/items — items + variants. Cost is deliberately omitted (v1). */
 const route = readRoute((db, url) => {

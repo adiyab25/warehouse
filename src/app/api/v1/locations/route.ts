@@ -1,6 +1,6 @@
-import { readRoute } from '../../../../api/read.ts';
-import { optEnum, parseCursor, parseLimit } from '../../../../api/params.ts';
-import { listLocations } from '../../../../db/read-api.ts';
+import { readRoute } from '@/modules/api/index';
+import { optEnum, parseCursor, parseLimit } from '@/modules/api/domain/params';
+import { listLocations } from '@/modules/api/index';
 
 /** GET /api/v1/locations. */
 const route = readRoute((db, url) => {

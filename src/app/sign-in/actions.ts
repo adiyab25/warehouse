@@ -3,10 +3,10 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { signIn } from '../../auth/login';
-import { configuredTenantId } from '../../auth/tenant';
-import { withTenant } from '../../db/client';
-import { getAppPool } from '../../db/app-pool';
+import { signIn } from '@/modules/auth/index';
+import { configuredTenantId } from '@/modules/auth/index';
+import { withTenant } from '@/modules/platform/index';
+import { getAppPool } from '@/modules/platform/index';
 import { LANG_COOKIE, langCookieOptions } from '../../i18n/request';
 import {
   SESSION_COOKIE,

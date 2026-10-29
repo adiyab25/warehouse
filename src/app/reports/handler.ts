@@ -1,10 +1,10 @@
-import type { Queryable } from '../../db/client.ts';
+import type { Queryable } from '@/modules/platform/index';
 import {
   DEFAULT_RATE_DAYS,
   REPLENISHMENT_LIMIT,
   belowMinimum,
   type BelowMinimumRow,
-} from '../../db/replenishment.ts';
+} from '@/modules/reports/index';
 import { StockError, resolveScope } from '../stock/handler.ts';
 
 /**

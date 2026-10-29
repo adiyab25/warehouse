@@ -3,14 +3,14 @@ import { after, before, test } from 'node:test';
 
 import { Client } from 'pg';
 
-import { issueClient } from '../../src/db/api-clients.ts';
-import { getAppPool } from '../../src/db/app-pool.ts';
-import { withTenant } from '../../src/db/client.ts';
-import { createItem, setLocationLevel } from '../../src/db/items.ts';
-import { createLocation } from '../../src/db/locations.ts';
-import { postMovement } from '../../src/db/movements.ts';
-import { MOVEMENT_REASONS } from '../../src/domain/movement.ts';
-import { API_ALLOWED_REASONS, executeMovement, parseMovementBody } from '../../src/api/movements-write.ts';
+import { issueClient } from '@/modules/api/index';
+import { getAppPool } from '@/modules/platform/index';
+import { withTenant } from '@/modules/platform/index';
+import { createItem, setLocationLevel } from '@/modules/catalog/index';
+import { createLocation } from '@/modules/locations/index';
+import { postMovement } from '@/modules/ledger/index';
+import { MOVEMENT_REASONS } from '@/modules/ledger/domain/movement';
+import { API_ALLOWED_REASONS, executeMovement, parseMovementBody } from '@/modules/api/index';
 import { GET as getMovements, POST as postMovements } from '../../src/app/api/v1/movements/route.ts';
 import { GET as getOnHand } from '../../src/app/api/v1/on-hand/route.ts';
 import { migrateUrl, sqlTestUrl } from '../harness/sql.ts';
@@ -863,7 +863,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test('D4: the API debit WAITS for a UI-side guarded debit (postReturn) holding the same (variant, location) lock, then sees its effect: never negative', { skip }, async () => {
   const pool = await getAppPool();
-  const { postReturn } = await import('../../src/db/returns.ts');
+  const { postReturn } = await import('@/modules/returns/index');
   const { variant } = await freshVariant(A, 'A18-RACE');
   const br = await stockedLoc(A, 'branch', variant, 1);
   let uiHolding!: () => void;

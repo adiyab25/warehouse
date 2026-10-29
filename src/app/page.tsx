@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { loadCurrentUser } from '../auth/current-user';
-import { navLinksForRole } from '../domain/home-nav';
+import { loadCurrentUser } from '@/modules/auth/index';
+import { navLinksForRole } from '@/modules/shell/domain/nav';
 import { t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 import { SIGN_IN_PATH } from './sign-in/contract';

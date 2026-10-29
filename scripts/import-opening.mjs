@@ -13,9 +13,9 @@
 import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
-import { appDatabaseUrl } from '../src/db/app-pool.ts';
-import { newPool } from '../src/db/client.ts';
-import { MAX_BYTES, escapeUnsafe, formatSummary, runOpeningImport } from '../src/import/opening.ts';
+import { appDatabaseUrl } from '../src/modules/platform/server/tenant-scope.ts';
+import { newPool } from '../src/modules/platform/server/db.ts';
+import { MAX_BYTES, escapeUnsafe, formatSummary, runOpeningImport } from '../src/modules/import-export/server/opening.ts';
 
 const USAGE =
   'usage: npm run import:opening -- --tenant <uuid> --user <username> --file <path.csv> [--apply]\n' +
