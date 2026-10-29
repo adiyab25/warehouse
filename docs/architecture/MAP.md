@@ -215,7 +215,7 @@ Legend — **State:** ✅ done · 🟡 partial (DB only / no UI) · ❌ not star
 A CI test (`F-10`) greps that each reason in the CHECK list has at least one non-test writer.
 
 ### 4.3 i18n namespaces
-One prefix per module: `auth.*`, `nav.*`, `stock.*`, `intake.*`, `requisitions.*`, `transfers.*`, `usage.*`, `returns.*`, `counts.*`, `items.*`, `labels.*`, `reports.*`, `approvals.*`, `admin.*`, `settings.*`, `common.*`. A test asserts `ar.json` and `en.json` have identical key sets (`F-08`).
+One prefix per module: `auth.*`, `nav.*`, `stock.*`, `intake.*`, `requisitions.*`, `transfers.*`, `usage.*`, `returns.*`, `counts.*`, `items.*`, `labels.*`, `reports.*`, `approvals.*`, `admin.*`, `settings.*`, `common.*`. A test asserts `ar.json` and `en.json` have identical key sets (`F-08`), **except the four Arabic-only CLDR plural forms (`cart.items.zero`/`two`/`few`/`many`) which English's `Intl.PluralRules` never selects** — those keys exist only in `ar.json` by design. See `tests/shell/domain/i18n-parity.test.ts`.
 
 ### 4.4 Test map
 | Folder | Kind | Needs DB |
