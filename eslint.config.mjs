@@ -8,6 +8,7 @@ const config = [
       'out/**',
       'coverage/**',
       'supabase/.temp/**',
+      '.worktrees/**',
       'next-env.d.ts',
     ],
   },
