@@ -26,3 +26,6 @@ supabase/.branches/
 .DS_Store
 Thumbs.db
 *.log
+
+# git worktrees (parallel agent isolation)
+.worktrees/
