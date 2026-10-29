@@ -8,6 +8,9 @@ import type { RequisitionLineView } from '@/app/requisitions/handler';
 import type { RequisitionStatus } from '../domain/requisition';
 import { REFUSAL_MESSAGE_KEYS, type RequisitionRefusal } from '../domain/requisition-ui';
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
+import { StatusBadge } from '@/modules/shell/ui/StatusBadge';
 
 /**
  * THE REQUISITION DETAIL — the state machine's desk.
@@ -213,12 +216,13 @@ export function RequisitionDetailScreen({
   const busy = approving || issuing || confirming;
 
   return (
-    <div className="req">
+    <div className="space-y-4">
+      <PageHeader title={t('requisitions.title', lang)} />
       <p className="req-detail-branch">
         {t('requisitions.detail.branch', { lang, params: { name: `${branchNameAr} (${branchCode})` } })}
       </p>
       <p className="req-status-line">
-        <span className="req-status">{statusLabel(status, lang)}</span>
+        <StatusBadge status={status} />
       </p>
       <p className="req-meta">
         {t('requisitions.detail.requested_at', { lang, params: { date: formatDate(new Date(requestedAt), lang) } })}

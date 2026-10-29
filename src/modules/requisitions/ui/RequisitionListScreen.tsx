@@ -8,6 +8,13 @@ import type { RequisitionRefusal } from '../domain/requisition-ui';
 import { REFUSAL_MESSAGE_KEYS } from '../domain/requisition-ui';
 import type { RequisitionStatus } from '../domain/requisition';
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
+import { StatusBadge } from '@/modules/shell/ui/StatusBadge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
  * THE REQUISITION LIST — what a branch user or the warehouse opens first.
@@ -132,9 +139,10 @@ export function RequisitionListScreen({
   }
 
   return (
-    <div className="req">
+    <div className="space-y-4">
+      <PageHeader title={t('requisitions.title', lang)} />
       {requisitions.length === 0 ? (
-        <p className="field-hint">{t('requisitions.list.empty', lang)}</p>
+        <EmptyState title={t('requisitions.list.empty', lang)} />
       ) : (
         <ul className="req-list">
           {requisitions.map((req) => (
@@ -144,7 +152,7 @@ export function RequisitionListScreen({
                   <span className="req-branch-name">
                     {req.branchNameAr} ({req.branchCode})
                   </span>
-                  <span className="req-status">{statusLabel(req.status, lang)}</span>
+                  <StatusBadge status={req.status} />
                 </span>
                 <span className="req-meta">
                   {t('requisitions.list.lines', { lang, params: { count: formatNumber(req.lineCount, lang) } })}
