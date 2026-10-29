@@ -1,16 +1,13 @@
 import type { ReplenishmentGroup } from '@/app/reports/handler';
 import { formatNumber, t } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
+import { DataTable } from '@/modules/shell/ui/DataTable';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
 
 /**
  * THE REPLENISHMENT REPORT — one table per branch, lowest cover first (the
  * handler hands the groups and the rows already in that order).
- *
- * A READ-ONLY server component. Quantities arrive as exact `numeric` STRINGS from
- * SQL (the cover and the rate are computed there too); they are FORMATTED here for
- * display (Latin digits, via `formatNumber`) and no arithmetic is done on them. A
- * cover of `null` is "not enough history", never a blank or an Infinity. The
- * language is read once (`getRequestLang`) and threaded through every label.
  */
 export interface ReplenishmentScreenProps {
   groups: ReplenishmentGroup[];
@@ -24,55 +21,67 @@ export interface ReplenishmentScreenProps {
 export async function ReplenishmentScreen({ groups, days, truncated, limit, branchLabel }: ReplenishmentScreenProps) {
   const lang = await getRequestLang();
   return (
-    <div className="replenishment">
-      <p className="stock-usage-note">{t('reports.subtitle', lang)}</p>
-      <p className="stock-usage-note">{t('reports.window_note', { lang, params: { days: formatNumber(days, lang) } })}</p>
+    <div className="space-y-4">
+      <PageHeader title={t('reports.heading', lang)} subtitle={t('reports.subtitle', lang)} />
+
+      <p className="text-sm text-muted-foreground">
+        {t('reports.window_note', { lang, params: { days: formatNumber(days, lang) } })}
+      </p>
       {branchLabel ? (
-        <p className="stock-usage-window">{t('reports.branch_scope', { lang, params: { branch: branchLabel } })}</p>
+        <p className="text-sm text-muted-foreground">
+          {t('reports.branch_scope', { lang, params: { branch: branchLabel } })}
+        </p>
       ) : null}
 
       {groups.length === 0 ? (
-        <p className="field-hint">{t('reports.empty', lang)}</p>
+        <EmptyState title={t('reports.empty', lang)} />
       ) : (
         groups.map((group) => (
-          <section key={group.locationId} className="replenishment-branch">
-            <h2 className="replenishment-branch-name">{group.location}</h2>
-            <table className="replenishment-table">
-              <thead>
-                <tr>
-                  <th scope="col" className="replenishment-item">{t('reports.col.item', lang)}</th>
-                  <th scope="col">{t('reports.col.on_hand', lang)}</th>
-                  <th scope="col">{t('reports.col.min', lang)}</th>
-                  <th scope="col">{t('reports.col.cover', lang)}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.rows.map((row) => (
-                  <tr key={row.itemId}>
-                    <td className="replenishment-item">{row.nameAr}</td>
-                    <td>{formatNumber(Number(row.onHand), lang)}</td>
-                    <td>{formatNumber(Number(row.minQty), lang)}</td>
-                    <td>
+          <section key={group.locationId} className="space-y-2">
+            <h2 className="text-lg font-semibold">{group.location}</h2>
+            <DataTable
+              data={group.rows as any}
+              columns={[
+                {
+                  key: 'item',
+                  header: t('reports.col.item', lang),
+                  render: (row: any) => row.nameAr,
+                },
+                {
+                  key: 'onHand',
+                  header: t('reports.col.on_hand', lang),
+                  render: (row: any) => formatNumber(Number(row.onHand), lang),
+                },
+                {
+                  key: 'minQty',
+                  header: t('reports.col.min', lang),
+                  render: (row: any) => formatNumber(Number(row.minQty), lang),
+                },
+                {
+                  key: 'cover',
+                  header: t('reports.col.cover', lang),
+                  render: (row: any) => (
+                    <span>
                       {row.coverDays === null ? (
-                        <span className="field-hint">{t('reports.cover.none', lang)}</span>
+                        <span className="text-muted-foreground">{t('reports.cover.none', lang)}</span>
                       ) : (
                         <span>{formatNumber(Number(row.coverDays), lang)}</span>
                       )}
-                      <span className="replenishment-rate">
+                      <span className="ml-2 text-xs text-muted-foreground">
                         {t('reports.col.rate', lang)}:{' '}
                         {row.ratePerDay === null ? t('reports.rate.none', lang) : formatNumber(Number(row.ratePerDay), lang)}
                       </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  ),
+                },
+              ]}
+            />
           </section>
         ))
       )}
 
       {truncated ? (
-        <p className="field-hint" role="status">
+        <p className="text-sm text-muted-foreground" role="status">
           {t('reports.truncated', { lang, params: { count: formatNumber(limit, lang) } })}
         </p>
       ) : null}
