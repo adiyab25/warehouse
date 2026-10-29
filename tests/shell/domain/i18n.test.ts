@@ -200,8 +200,8 @@ test('a key used in the app but missing from the dictionaries is detectable', ()
   const files = [
     'src/app/page.tsx',
     'src/app/layout.tsx',
-    'src/app/sign-in/page.tsx',
-    'src/app/sign-in/contract.ts',
+    'src/app/(auth)/sign-in/page.tsx',
+    'src/app/(auth)/sign-in/contract.ts',
     'src/app/sign-out/route.ts',
     'src/app/intake/page.tsx',
     'src/modules/receiving/ui/IntakeScreen.tsx',

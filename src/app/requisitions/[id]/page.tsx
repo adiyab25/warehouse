@@ -9,7 +9,7 @@ import { withTenant } from '@/modules/platform/index';
 import { REFUSAL_MESSAGE_KEYS } from '@/modules/requisitions/domain/requisition-ui';
 import { t } from '../../../i18n';
 import { getRequestLang } from '../../../i18n/request';
-import { SIGN_IN_PATH } from '../../sign-in/contract';
+import { SIGN_IN_PATH } from '../../(auth)/sign-in/contract';
 import { getRequisition } from '../handler';
 
 export async function generateMetadata() {

@@ -5,7 +5,7 @@ import { loadCurrentUser } from '@/modules/auth/index';
 import { navLinksForRole } from '@/modules/shell/domain/nav';
 import { t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
-import { SIGN_IN_PATH } from './sign-in/contract';
+import { SIGN_IN_PATH } from './(auth)/sign-in/contract';
 
 /**
  * The home page — the post-sign-in landing, and THE GATE.

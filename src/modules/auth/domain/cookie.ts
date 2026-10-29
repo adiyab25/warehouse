@@ -7,7 +7,7 @@
  * sibling subdomain (a compromised `blog.example.com` cannot fixate
  * `example.com`'s session), and it cannot be read over plain http. None of that
  * is enforceable by a name alone, so the name and the attributes must agree —
- * see `sessionCookieOptions` in src/app/sign-in/contract.ts, which sets
+ * see `sessionCookieOptions` in src/app/(auth)/sign-in/contract.ts, which sets
  * `secure` whenever this name is used.
  *
  * The exception is DEVELOPMENT, which serves plain `http://localhost`. A

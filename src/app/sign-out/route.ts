@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
-import { SIGN_IN_PATH, sessionCookieOptions } from '../sign-in/contract';
+import { SIGN_IN_PATH, sessionCookieOptions } from '../(auth)/sign-in/contract';
 
 /**
  * SIGN-OUT — the way out of the front door.

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
-import { SIGN_IN_PATH } from './app/sign-in/contract';
+import { SIGN_IN_PATH } from './app/(auth)/sign-in/contract';
 
 /**
  * The FIRST half of the session gate: send a request with NO session cookie to

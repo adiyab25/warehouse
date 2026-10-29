@@ -9,7 +9,7 @@ import {
   USERNAME_FIELD,
   failedSignInRedirect,
   sessionCookieOptions,
-} from '@/app/sign-in/contract';
+} from '@/app/(auth)/sign-in/contract';
 
 /**
  * The sign-in action's CONTRACT — the parts a `'use server'` module cannot

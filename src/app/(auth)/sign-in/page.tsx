@@ -1,5 +1,5 @@
-import { t } from '../../i18n';
-import { getRequestLang } from '../../i18n/request';
+import { t } from '../../../i18n';
+import { getRequestLang } from '../../../i18n/request';
 
 import { signInAction } from './actions';
 import { ERROR_PARAM, USERNAME_FIELD } from './contract';
