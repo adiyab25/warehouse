@@ -874,7 +874,6 @@ test('safeText: control + bidi characters become \\uXXXX, long text is capped at
   assert.equal(OP.safeText('x'.repeat(61)), `${'x'.repeat(60)}…`);
 });
 
-// eslint-disable-next-line no-control-regex
 const RAW_CTRL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 const flat = (r: ImportResult, apply = true): string => formatSummary(r, apply).replace(/\n/g, ' ');
 
