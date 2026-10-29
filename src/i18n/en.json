@@ -180,5 +180,14 @@
   "reports.error.unauthenticated": "Your session has ended. Sign in again.",
   "reports.error.forbidden": "The replenishment report is for the warehouse and an authorised branch only.",
   "reports.error.invalid": "Your account is not assigned to a branch, so there is nothing to show. Ask an administrator.",
-  "reports.back": "Home"
+  "reports.back": "Home",
+  "home.dashboard.owner.stock_lines": "Stock lines",
+  "home.dashboard.owner.below_min": "Below minimum",
+  "home.dashboard.owner.open_requests": "Open requests",
+  "home.dashboard.owner.in_transit": "In transit",
+  "home.dashboard.manager.to_approve": "To approve",
+  "home.dashboard.manager.to_issue": "To issue",
+  "home.dashboard.manager.receipts_receiving": "Receipts receiving",
+  "home.dashboard.branch.my_requests": "My open requests",
+  "home.dashboard.branch.to_confirm": "To confirm"
 }
