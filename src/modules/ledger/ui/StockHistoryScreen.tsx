@@ -3,17 +3,17 @@ import { REASON_MESSAGE_KEYS } from '../domain/movement';
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
 import type { StockRowView } from '@/app/stock/handler';
+import { DataTable } from '@/modules/shell/ui/DataTable';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
+import { FilterBar } from '@/modules/shell/ui/FilterBar';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
 
-/**
- * THE "WHERE DID IT GO" SCREEN — one item's balance per location and its FULL
- * movement history: reason, from, to, ACTOR and time, newest first.
- *
- * A READ-ONLY server component (no state, no action). It answers the owner's
- * question literally: what do we have, where, how many, who took it, and when.
- *
- * The language is read once (`getRequestLang`) and threaded through every label,
- * reason, date and number, so English renders English month names and copy.
- */
+/** The translated label for a movement reason — never the raw enum value. */
+export function reasonLabel(reason: string, lang: Lang): string {
+  const key = REASON_MESSAGE_KEYS[reason as keyof typeof REASON_MESSAGE_KEYS];
+  return key ? t(key, lang) : reason;
+}
+
 export interface StockHistoryScreenProps {
   sku: string;
   nameAr: string;
@@ -22,12 +22,6 @@ export interface StockHistoryScreenProps {
   /** True when more movements exist beyond the bound shown. */
   truncated: boolean;
   branchLabel: string | null;
-}
-
-/** The translated label for a movement reason — never the raw enum value. */
-export function reasonLabel(reason: string, lang: Lang): string {
-  const key = REASON_MESSAGE_KEYS[reason as keyof typeof REASON_MESSAGE_KEYS];
-  return key ? t(key, lang) : reason;
 }
 
 export async function StockHistoryScreen({
@@ -40,71 +34,48 @@ export async function StockHistoryScreen({
 }: StockHistoryScreenProps) {
   const lang = await getRequestLang();
   return (
-    <div className="stock">
-      <p className="stock-variant">
-        <span className="stock-name">{nameAr}</span>{' '}
-        <span className="ltr-value stock-sku">{sku}</span>
-      </p>
+    <div className="space-y-4">
+      <PageHeader title={nameAr} subtitle={sku} />
       {branchLabel ? (
-        <p className="stock-scope">{t('stock.scope.branch', { lang, params: { name: branchLabel } })}</p>
+        <p className="text-sm text-muted-foreground">{t('stock.scope.branch', { lang, params: { name: branchLabel } })}</p>
       ) : null}
 
-      <section className="stock-section">
-        <h2>{t('stock.detail.onhand', lang)}</h2>
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">{t('stock.detail.onhand', lang)}</h2>
         {onHand.length === 0 ? (
-          <p className="field-hint">{t('stock.detail.onhand_empty', lang)}</p>
+          <EmptyState title={t('stock.detail.onhand_empty', lang)} />
         ) : (
-          <ul className="stock-list">
-            {onHand.map((row) => (
-              <li key={row.location} className="stock-balance">
-                <span className="stock-location">{row.location}</span>
-                <span className="stock-qty">
-                  {t('stock.col.qty', lang)}: {formatNumber(Number(row.qty), lang)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <DataTable
+            data={onHand as any}
+            columns={[
+              { key: 'location', header: t('stock.col.location', lang), render: (row: StockRowView) => row.location },
+              { key: 'qty', header: t('stock.col.qty', lang), render: (row: StockRowView) => formatNumber(Number(row.qty), lang) },
+            ]}
+          />
         )}
       </section>
 
-      <section className="stock-section">
-        <h2>{t('stock.detail.movements', lang)}</h2>
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">{t('stock.detail.movements', lang)}</h2>
         {movements.length === 0 ? (
-          <p className="field-hint">{t('stock.detail.empty_movements', lang)}</p>
+          <EmptyState title={t('stock.detail.empty_movements', lang)} />
         ) : (
-          <ol className="stock-movements">
-            {movements.map((m) => (
-              <li key={m.seq} className="stock-movement">
-                <div className="stock-movement-head">
-                  <span className="stock-reason">{reasonLabel(m.reason, lang)}</span>
-                  <span className="stock-qty">
-                    {t('stock.movement.qty', lang)}: {formatNumber(Number(m.qty), lang)}
-                  </span>
-                </div>
-                <dl className="stock-movement-detail">
-                  <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.from', lang)}</dt>
-                    <dd className="stock-location">{m.fromLocation ?? t('stock.none', lang)}</dd>
-                  </div>
-                  <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.to', lang)}</dt>
-                    <dd className="stock-location">{m.toLocation ?? t('stock.none', lang)}</dd>
-                  </div>
-                  <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.actor', lang)}</dt>
-                    <dd className="stock-actor">{m.actorName ?? t('stock.actor.system', lang)}</dd>
-                  </div>
-                  <div className="stock-movement-pair">
-                    <dt>{t('stock.movement.at', lang)}</dt>
-                    <dd className="stock-at">{formatDate(new Date(m.occurredAt), lang)}</dd>
-                  </div>
-                </dl>
-              </li>
-            ))}
-          </ol>
+          <FilterBar>
+            <DataTable
+              data={movements as any}
+              columns={[
+                { key: 'reason', header: t('stock.movement.reason', lang) ?? 'Reason', render: (m: MovementDetail) => reasonLabel(m.reason, lang) },
+                { key: 'qty', header: t('stock.movement.qty', lang), render: (m: MovementDetail) => formatNumber(Number(m.qty), lang) },
+                { key: 'from', header: t('stock.movement.from', lang), render: (m: MovementDetail) => m.fromLocation ?? t('stock.none', lang) },
+                { key: 'to', header: t('stock.movement.to', lang), render: (m: MovementDetail) => m.toLocation ?? t('stock.none', lang) },
+                { key: 'actor', header: t('stock.movement.actor', lang), render: (m: MovementDetail) => m.actorName ?? t('stock.actor.system', lang) },
+                { key: 'at', header: t('stock.movement.at', lang), render: (m: MovementDetail) => formatDate(new Date(m.occurredAt), lang) },
+              ]}
+            />
+          </FilterBar>
         )}
         {truncated ? (
-          <p className="stock-truncated" role="status">
+          <p className="text-sm text-muted-foreground" role="status">
             {t('stock.detail.truncated', { lang, params: { count: formatNumber(movements.length, lang) } })}
           </p>
         ) : null}
