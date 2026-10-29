@@ -1,83 +1,79 @@
 import type { UsageRow } from '../server/usage';
 import { formatCurrency, formatNumber, t } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
+import { PageHeader } from '@/modules/shell/ui/PageHeader';
+import { DataTable } from '@/modules/shell/ui/DataTable';
+import { EmptyState } from '@/modules/shell/ui/EmptyState';
+import { FilterBar } from '@/modules/shell/ui/FilterBar';
 
 /**
  * THE ACCOUNTS VIEW — usage and value by branch, for a date window.
- *
- * A READ-ONLY server component (no state, no action): the window is a plain GET
- * form (`?from=&to=`), which works on the cheapest phone without JavaScript and
- * makes the window EXPLICIT in the URL so a report can be shared.
- *
- * The language is read once (`getRequestLang`) and threaded through every label,
- * number, date and money amount, so English renders with English month names,
- * the EGP symbol in the English form, and English copy.
  */
 export interface StockUsageScreenProps {
-  /** The window actually run (echoed so the screen states it). */
   from: string;
   to: string;
   rows: UsageRow[];
-  /** The exact `numeric(12,2)` total string from SQL. */
   totalEgp: string;
-  /** True when more rows exist beyond the bound shown. */
   truncated: boolean;
 }
 
 export async function StockUsageScreen({ from, to, rows, totalEgp, truncated }: StockUsageScreenProps) {
   const lang = await getRequestLang();
   return (
-    <div className="stock-usage">
-      <p className="stock-usage-note">{t('stock.usage.subtitle', lang)}</p>
-      <p className="stock-usage-note">{t('stock.usage.cost_note', lang)}</p>
-      <p className="stock-usage-note">{t('stock.usage.transit_note', lang)}</p>
+    <div className="space-y-4">
+      <PageHeader title={t('stock.usage.heading', lang)} subtitle={t('stock.usage.subtitle', lang)} />
 
-      {/* The window is a GET form, so it is server-side, shareable, and works
-          with no JavaScript. The dates are machine values, so they stay
-          LEFT-TO-RIGHT (`.ltr-value`). */}
-      <form className="stock-search" method="get" action="/stock/usage">
-        <label htmlFor="usage-from">{t('stock.usage.from', lang)}</label>
-        <input id="usage-from" name="from" type="date" defaultValue={from} className="ltr-value" />
-        <label htmlFor="usage-to">{t('stock.usage.to', lang)}</label>
-        <input id="usage-to" name="to" type="date" defaultValue={to} className="ltr-value" />
-        <button type="submit">{t('stock.usage.submit', lang)}</button>
-      </form>
+      <p className="text-sm text-muted-foreground">{t('stock.usage.cost_note', lang)}</p>
+      <p className="text-sm text-muted-foreground">{t('stock.usage.transit_note', lang)}</p>
 
-      <p className="stock-usage-window">{t('stock.usage.window', { lang, params: { from, to } })}</p>
+      <FilterBar>
+        <form className="flex w-full flex-wrap items-end gap-2" method="get" action="/stock/usage">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="usage-from" className="text-sm">{t('stock.usage.from', lang)}</label>
+            <input id="usage-from" name="from" type="date" defaultValue={from} className="ltr-value h-10 rounded-md border px-3" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="usage-to" className="text-sm">{t('stock.usage.to', lang)}</label>
+            <input id="usage-to" name="to" type="date" defaultValue={to} className="ltr-value h-10 rounded-md border px-3" />
+          </div>
+          <button type="submit" className="h-10 rounded-md bg-primary px-4 text-primary-foreground">
+            {t('stock.usage.submit', lang)}
+          </button>
+        </form>
+      </FilterBar>
+
+      <p className="text-sm text-muted-foreground">{t('stock.usage.window', { lang, params: { from, to } })}</p>
 
       {rows.length === 0 ? (
-        <p className="field-hint">{t('stock.usage.empty', lang)}</p>
+        <EmptyState title={t('stock.usage.empty', lang)} />
       ) : (
-        <ul className="stock-list">
-          {rows.map((row) => (
-            <li key={`${row.branch}:${row.variantId}`} className="stock-item stock-usage-item">
-              <span className="stock-usage-head">
-                <span className="stock-name">{row.nameAr}</span>
-                <span className="ltr-value stock-sku">{row.sku}</span>
-              </span>
-              <span className="stock-usage-meta">
-                <span className="stock-location">{row.branch}</span>
-                <span className="stock-qty">
-                  {t('stock.usage.qty', lang)}: {formatNumber(Number(row.issuedQty), lang)}
+        <DataTable
+          data={rows as any}
+          columns={[
+            {
+              key: 'item',
+              header: t('stock.col.item', lang),
+              render: (row: UsageRow) => (
+                <span>
+                  <span className="font-medium">{row.nameAr}</span>
+                  <span className="ltr-value ml-2 text-xs text-muted-foreground">{row.sku}</span>
                 </span>
-                <span className="stock-value">
-                  {t('stock.col.value', lang)}: {formatCurrency(Number(row.valueEgp), lang)}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
+              ),
+            },
+            { key: 'branch', header: t('stock.col.location', lang), render: (row: UsageRow) => row.branch },
+            { key: 'qty', header: t('stock.usage.qty', lang), render: (row: UsageRow) => formatNumber(Number(row.issuedQty), lang) },
+            { key: 'value', header: t('stock.col.value', lang), render: (row: UsageRow) => formatCurrency(Number(row.valueEgp), lang) },
+          ]}
+        />
       )}
 
-      {/* The TOTAL is the database's own sum (`sum(...)::numeric(12,2)`), never
-          a JS sum of the rows above. */}
-      <p className="stock-usage-total">
-        <span>{t('stock.usage.total', lang)}</span>
+      <p className="text-sm font-medium">
+        <span>{t('stock.usage.total', lang)}: </span>
         <span className="stock-value">{formatCurrency(Number(totalEgp), lang)}</span>
       </p>
 
       {truncated ? (
-        <p className="stock-truncated" role="status">
+        <p className="text-sm text-muted-foreground" role="status">
           {t('stock.usage.truncated', { lang, params: { count: formatNumber(rows.length, lang) } })}
         </p>
       ) : null}
