@@ -1,35 +1,34 @@
 'use server';
 
-import { withTenant } from '@/modules/platform/db';
-import { createItem } from '@/modules/catalog/db';
+import { runGatedAction } from '@/modules/auth/action-runner';
+import { ActionRefusal, requirePermission, requiredField } from '@/modules/auth/guard';
+import { PERMISSION } from '@/modules/auth/keys';
+import { createItem, type ItemFamily } from '@/modules/catalog/db';
 
-export async function createItemAction(formData: FormData) {
-  const nameAr = formData.get('nameAr') as string;
-  const sku = formData.get('sku') as string;
-  const barcode = formData.get('barcode') as string;
-  const family = formData.get('family') as string;
-  const uom = formData.get('uom') as string;
-  const unitCost = formData.get('unitCost') as string;
+const FAMILIES: readonly string[] = ['sellable', 'consumable', 'asset'];
 
-  const tenantId = process.env.TENANT_ID!;
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: process.env.APP_DATABASE_URL });
-  const client = await pool.connect();
-  try {
-    await client.query(`select set_config('app.tenant_id', $1, true)`, [tenantId]);
-    const db = {
-      query: (sql: string, params?: unknown[]) => client.query(sql, params),
-    };
-    await createItem(db as any, {
-      nameAr,
-      sku,
-      barcode,
-      family: family as any,
-      uom: uom || 'unit',
-      costEgp: unitCost ? Number(unitCost) : undefined,
+/**
+ * Creates an item and its first variant — a WRITE, so it is gated: a role
+ * without `catalog:items:manage` (a branch, for instance) cannot mint products
+ * by posting this action directly.
+ */
+export async function createItemAction(formData: FormData): Promise<void> {
+  await runGatedAction('/items', async (db, cookie) => {
+    await requirePermission(db, cookie, PERMISSION.itemsManage);
+
+    const family = String(formData.get('family') ?? '');
+    if (!FAMILIES.includes(family)) {
+      throw new ActionRefusal('invalid', `An item's family must be one of: ${FAMILIES.join(', ')}.`);
+    }
+    const cost = Number(formData.get('unitCost'));
+
+    await createItem(db, {
+      nameAr: requiredField(formData, 'nameAr'),
+      family: family as ItemFamily,
+      sku: requiredField(formData, 'sku'),
+      barcode: requiredField(formData, 'barcode'),
+      uom: String(formData.get('uom') ?? 'unit') || 'unit',
+      costEgp: Number.isFinite(cost) && cost > 0 ? cost : undefined,
     });
-  } finally {
-    client.release();
-    await pool.end();
-  }
+  });
 }

@@ -1,21 +1,21 @@
 'use server';
 
+import { runGatedAction } from '@/modules/auth/action-runner';
+import { ActionRefusal, requirePermission, requiredField } from '@/modules/auth/guard';
+import { PERMISSION } from '@/modules/auth/keys';
 import { openCount } from '@/modules/counts/db';
 
-export async function openCountAction(formData: FormData) {
-  const locationId = formData.get('locationId') as string;
-  const startedBy = formData.get('startedBy') as string;
-
-  const tenantId = process.env.TENANT_ID!;
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: process.env.APP_DATABASE_URL });
-  const client = await pool.connect();
-  try {
-    await client.query(`select set_config('app.tenant_id', $1, true)`, [tenantId]);
-    const db = { query: (sql: string, params?: unknown[]) => client.query(sql, params) };
-    await openCount(db as any, { locationId, startedBy });
-  } finally {
-    client.release();
-    await pool.end();
-  }
+/**
+ * Opens a count session — a WRITE, so it is gated like one.
+ *
+ * `startedBy` used to come from a form field, which let whoever posted it name
+ * somebody else as the counter. It is now the SESSION's user: the ledger records
+ * who really opened the sheet.
+ */
+export async function openCountAction(formData: FormData): Promise<void> {
+  await runGatedAction('/counts', async (db, cookie) => {
+    const user = await requirePermission(db, cookie, PERMISSION.countsCreate);
+    const locationId = requiredField(formData, 'locationId');
+    await openCount(db, { locationId, startedBy: user.userId });
+  });
 }

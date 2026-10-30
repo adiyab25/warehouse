@@ -240,5 +240,10 @@
   "admin.module.api": "API",
   "admin.module.settings": "Settings",
   "admin.module.transfers": "Transfers",
-  "admin.module.other": "Other"
+  "admin.module.other": "Other",
+  "action.saved": "Saved.",
+  "action.error.unauthenticated": "Your session has ended — sign in again.",
+  "action.error.forbidden": "Your account's role does not permit this.",
+  "action.error.invalid": "That input is not valid — check the fields.",
+  "action.error.conflict": "That action is not allowed in the current state."
 }

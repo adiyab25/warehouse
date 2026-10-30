@@ -1,28 +1,33 @@
 'use server';
 
-import { createLocation } from '@/modules/locations/db';
+import { runGatedAction } from '@/modules/auth/action-runner';
+import { ActionRefusal, requirePermission, requiredField } from '@/modules/auth/guard';
+import { PERMISSION } from '@/modules/auth/keys';
+import { createLocation, type LocationType } from '@/modules/locations/db';
 
-export async function createLocationAction(formData: FormData) {
-  const code = formData.get('code') as string;
-  const nameAr = formData.get('nameAr') as string;
-  const nameEn = formData.get('nameEn') as string;
-  const type = formData.get('type') as string;
+const TYPES: readonly string[] = [
+  'warehouse', 'branch', 'bin', 'vendor', 'holder', 'scrap', 'quarantine',
+];
 
-  const tenantId = process.env.TENANT_ID!;
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: process.env.APP_DATABASE_URL });
-  const client = await pool.connect();
-  try {
-    await client.query(`select set_config('app.tenant_id', $1, true)`, [tenantId]);
-    const db = { query: (sql: string, params?: unknown[]) => client.query(sql, params) };
-    await createLocation(db as any, {
-      code,
-      nameAr,
-      nameEn: nameEn || undefined,
-      type: type as any,
+/**
+ * Creates a location — a WRITE, so it is gated: a role without
+ * `locations:locations:manage` cannot invent a branch by posting this action.
+ */
+export async function createLocationAction(formData: FormData): Promise<void> {
+  await runGatedAction('/locations', async (db, cookie) => {
+    await requirePermission(db, cookie, PERMISSION.locationsManage);
+
+    const type = String(formData.get('type') ?? '');
+    if (!TYPES.includes(type)) {
+      throw new ActionRefusal('invalid', `A location's type must be one of: ${TYPES.join(', ')}.`);
+    }
+    const nameEn = formData.get('nameEn');
+
+    await createLocation(db, {
+      code: requiredField(formData, 'code'),
+      nameAr: requiredField(formData, 'nameAr'),
+      nameEn: typeof nameEn === 'string' && nameEn.trim() !== '' ? nameEn.trim() : undefined,
+      type: type as LocationType,
     });
-  } finally {
-    client.release();
-    await pool.end();
-  }
+  });
 }

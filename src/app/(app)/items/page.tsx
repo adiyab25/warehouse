@@ -1,8 +1,18 @@
+import { ActionBanner } from '@/modules/shell/ui/ActionBanner';
+import { getRequestLang } from '../../../i18n/request';
 import { createItemAction } from './actions';
 
-export default function ItemsPage() {
+export default async function ItemsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; refused?: string }>;
+}) {
+  const lang = await getRequestLang();
+  const { ok, refused } = await searchParams;
+
   return (
     <div className="p-6 max-w-2xl">
+      <ActionBanner lang={lang} ok={ok === '1'} refused={refused} />
       <h1 className="text-2xl font-bold mb-4">Items Management</h1>
       <form action={createItemAction} className="space-y-4">
         <div>

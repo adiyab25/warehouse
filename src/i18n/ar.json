@@ -244,5 +244,10 @@
   "admin.module.api": "الربط البرمجي",
   "admin.module.settings": "الإعدادات",
   "admin.module.transfers": "التحويلات",
-  "admin.module.other": "أخرى"
+  "admin.module.other": "أخرى",
+  "action.saved": "تم الحفظ.",
+  "action.error.unauthenticated": "انتهت الجلسة — سجّل الدخول من جديد.",
+  "action.error.forbidden": "لا يملك حسابك صلاحية لهذا الإجراء.",
+  "action.error.invalid": "البيانات غير صحيحة — راجع الحقول.",
+  "action.error.conflict": "لا يمكن تنفيذ هذا الإجراء في الحالة الحالية."
 }

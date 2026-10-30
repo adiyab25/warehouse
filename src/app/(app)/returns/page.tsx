@@ -1,8 +1,18 @@
+import { ActionBanner } from '@/modules/shell/ui/ActionBanner';
+import { getRequestLang } from '../../../i18n/request';
 import { createReturnAction } from './actions';
 
-export default function ReturnsPage() {
+export default async function ReturnsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; refused?: string }>;
+}) {
+  const lang = await getRequestLang();
+  const { ok, refused } = await searchParams;
+
   return (
     <div className="p-6 max-w-2xl">
+      <ActionBanner lang={lang} ok={ok === '1'} refused={refused} />
       <h1 className="text-2xl font-bold mb-4">Returns</h1>
       <form action={createReturnAction} className="space-y-4">
         <div>
