@@ -15,7 +15,7 @@ import {
   scanIn,
   submitIn,
 } from '@/app/intake/handler';
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { createSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
 import { createItem } from '@/modules/catalog/index';
@@ -31,7 +31,7 @@ import {
   previewShortfalls,
   receivedLines,
   resolveScan,
-} from '@/modules/receiving/domain/intake';
+} from '@/modules/receiving/schema';
 import { REPO_ROOT, migrateUrl, sqlTestUrl, withDb } from '../../harness/sql.ts';
 
 /**

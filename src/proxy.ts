@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { SIGN_IN_PATH } from './app/(auth)/sign-in/contract';
 
 /**

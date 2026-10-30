@@ -2,11 +2,11 @@
 
 import { cookies } from 'next/headers';
 
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { configuredTenantId } from '@/modules/auth/index';
 import { getAppPool } from '@/modules/platform/index';
 import { withTenant } from '@/modules/platform/index';
-import type { ReceiptForm } from '@/modules/receiving/domain/intake';
+import type { ReceiptForm } from '@/modules/receiving/schema';
 import {
   IntakeError,
   checkNoteIn,

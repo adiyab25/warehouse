@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { USERNAME_PATTERN, isStoredUsername, normaliseName, normaliseUsername } from '@/modules/platform/domain/text';
+import { USERNAME_PATTERN, isStoredUsername, normaliseName, normaliseUsername } from '@/modules/platform/schema';
 
 /**
  * The normaliser that replaces `trim().toUpperCase()`.

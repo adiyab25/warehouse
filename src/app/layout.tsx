@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 import { LanguageSwitcher } from '@/modules/shell/ui/LanguageSwitcher';
+import { PageNav } from '@/modules/shell/ui/PageNav';
 import { DIRECTION, t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 
@@ -44,7 +45,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html lang={lang} dir={DIRECTION[lang]} className={cn("font-sans", plexSansArabic.variable, plexMono.variable)}>
       <body>
-        <header>
+        <header className="flex items-center gap-2 p-2 border-b">
+          <PageNav />
           <LanguageSwitcher lang={lang} />
         </header>
         {children}

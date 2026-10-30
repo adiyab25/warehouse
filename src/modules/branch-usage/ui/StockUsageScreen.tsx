@@ -1,4 +1,4 @@
-import type { UsageRow } from '../server/usage';
+import type { UsageRow } from '../db';
 import { formatCurrency, formatNumber, t } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
 import { PageHeader } from '@/modules/shell/ui/PageHeader';

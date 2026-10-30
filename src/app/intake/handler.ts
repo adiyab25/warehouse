@@ -18,7 +18,7 @@ import {
   type IntakeRefusal,
   type ReceiptForm,
   type ScanResult,
-} from '@/modules/receiving/domain/intake';
+} from '@/modules/receiving/schema';
 
 /**
  * The intake screen's LOGIC, with the request boundary left OUT.

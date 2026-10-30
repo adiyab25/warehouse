@@ -4,7 +4,7 @@ import { after, test } from 'node:test';
 
 import { Client } from 'pg';
 
-import { hashToken } from '@/modules/auth/domain/token';
+import { hashToken } from '@/modules/auth/schema';
 import { issueClient } from '@/modules/api/index';
 import { withTenant } from '@/modules/platform/index';
 import { migrateUrl, sqlTestUrl, withDb } from '../../harness/sql.ts';

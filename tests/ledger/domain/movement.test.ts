@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { MOVEMENT_REASONS, signedDelta, validateMovement } from '@/modules/ledger/domain/movement';
+import { MOVEMENT_REASONS, signedDelta, validateMovement } from '@/modules/ledger/schema';
 
 /**
  * Unit tests for the movement rules — the pure functions a posting route runs

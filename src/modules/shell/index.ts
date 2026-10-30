@@ -1,1 +1,1 @@
-export * from './domain/nav';
+export * from './schema';

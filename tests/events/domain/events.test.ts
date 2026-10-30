@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { emit } from '@/modules/events/domain/events';
+import { emit } from '@/modules/events/service';
 
 /** `emit` must refuse sensitive payload keys at ANY depth, before touching the db. */
 const calls: unknown[] = [];

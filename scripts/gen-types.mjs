@@ -271,7 +271,7 @@ export const foreignKeys = ${fkLines} as const;
 `;
 
   writeFileSync(outFile, output);
-  console.log(`gen-types: wrote ${tableNames.length} table(s) to src/modules/platform/server/types.ts`);
+  console.log(`gen-types: wrote ${tableNames.length} table(s) to src/modules/platform/types.ts`);
 } finally {
   await client.end().catch(() => {});
 }

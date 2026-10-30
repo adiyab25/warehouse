@@ -12,8 +12,8 @@ import {
   type OnHandRow,
   type UsageRow,
 } from '@/modules/branch-usage/index';
-import { canApproveOrIssue, canRequest } from '@/modules/requisitions/domain/requisition-ui';
-import { isUuid } from '@/modules/platform/domain/ids';
+import { canApproveOrIssue, canRequest } from '@/modules/requisitions/schema';
+import { isUuid } from '@/modules/platform/schema';
 
 /**
  * THE STOCK SCREENS' LOGIC, with the request boundary left OUT — the same seam

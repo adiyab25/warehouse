@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 
 import { LOCKOUT_THRESHOLD, signIn } from '@/modules/auth/index';
-import { hashPassword } from '@/modules/auth/domain/password';
+import { hashPassword } from '@/modules/auth/schema';
 import { readSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
 import { sqlTestUrl, withDb } from '../../harness/sql.ts';

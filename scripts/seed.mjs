@@ -31,15 +31,15 @@ import { pathToFileURL } from 'node:url';
 
 import pg from 'pg';
 
-import { hashPassword } from '../src/modules/auth/domain/password.ts';
-import { createAppPool } from '../src/modules/platform/server/tenant-scope.ts';
-import { withTenant } from '../src/modules/platform/server/db.ts';
-import { setLocationLevel } from '../src/modules/catalog/server/items.ts';
-import { escapeUnsafe, runOpeningImport } from '../src/modules/import-export/server/opening.ts';
+import { hashPassword } from '../src/modules/auth/schema.ts';
+import { createAppPool } from '../src/modules/platform/service.ts';
+import { withTenant } from '../src/modules/platform/db.ts';
+import { setLocationLevel } from '../src/modules/catalog/db.ts';
+import { escapeUnsafe, runOpeningImport } from '../src/modules/import-export/db.ts';
 
 export const DEFAULT_NAME = 'Demo Kindergarten';
 export const DEMO_TENANT_ID = '11111111-2222-3333-4444-555555555555';
-export const MIN_PASSWORD = 12;
+export const MIN_PASSWORD = 8;
 
 const BRANCH_NAMES = [
   'المعادي', 'مدينة نصر', 'الزمالك', 'المهندسين', 'الدقي', 'التجمع الخامس', 'الشيخ زايد',
@@ -64,7 +64,7 @@ export function locationPlan() {
 /** The users: [username, Arabic display name, role, branch code | null, password key]. */
 export function userPlan() {
   const out = [
-    ['owner', 'مالك النظام', 'owner', null, 'owner'],
+    ['admin', 'مالك النظام', 'owner', null, 'admin'],
     ['manager', 'مدير المستودع', 'warehouse_manager', null, 'manager'],
   ];
   for (let i = 1; i <= 14; i++) out.push([`branch${pad(i)}`, `مسؤول فرع ${pad(i)}`, 'branch_user', `BR-${pad(i)}`, 'branch']);
@@ -98,7 +98,7 @@ export function openingCsv() {
 export function readPasswords(env = process.env) {
   const out = {};
   const bad = [];
-  for (const [key, name] of [['owner', 'SEED_OWNER_PASSWORD'], ['manager', 'SEED_MANAGER_PASSWORD'], ['branch', 'SEED_BRANCH_PASSWORD']]) {
+  for (const [key, name] of [['admin', 'SEED_ADMIN_PASSWORD'], ['manager', 'SEED_MANAGER_PASSWORD'], ['branch', 'SEED_BRANCH_PASSWORD']]) {
     const v = env[name];
     if (typeof v !== 'string' || v.length < MIN_PASSWORD) bad.push(name);
     else out[key] = v;
@@ -152,7 +152,7 @@ export async function seedTenant({ ownerUrl, appUrl, name, passwords }) {
 
     // Hash first (slow, no transaction open). One hash per distinct password.
     const hashes = {};
-    for (const k of ['owner', 'manager', 'branch']) hashes[k] = await hashPassword(passwords[k]);
+    for (const k of ['admin', 'manager', 'branch']) hashes[k] = await hashPassword(passwords[k]);
 
     await owner.query('begin');
     try {
@@ -163,7 +163,7 @@ export async function seedTenant({ ownerUrl, appUrl, name, passwords }) {
         tenantId = found.rows[0].id;
         if (tenantId === DEMO_TENANT_ID) throw new Error('refusing to seed: that name belongs to the demo tenant, which the seed never touches');
         const shape = await owner.query(
-          `select (select count(*) from app_users where tenant_id=$1 and username='owner' and role='owner') as u,
+          `select (select count(*) from app_users where tenant_id=$1 and username='admin' and role='owner') as u,
                   (select count(*) from locations where tenant_id=$1 and code='WH-01') as l`,
           [tenantId],
         );
@@ -205,7 +205,7 @@ export async function seedTenant({ ownerUrl, appUrl, name, passwords }) {
     // From here on: the app role only, through the real importer.
     const result = await runOpeningImport(appPool, {
       tenantId,
-      username: 'owner',
+      username: 'admin',
       fileName: 'seed-opening.csv',
       apply: true,
       readInput: () => openingCsv(),

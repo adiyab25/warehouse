@@ -10,9 +10,9 @@
 import { itemLevelAt } from '@/modules/reports/index';
 import { lockStockPair, postMovement } from '@/modules/ledger/index';
 import type { Queryable } from '@/modules/platform/index';
-import { isValidScannedCode, normaliseScannedCode } from '@/modules/catalog/domain/barcode';
-import { emit } from '@/modules/events/domain/events';
-import { MOVEMENT_REASONS, validateMovement } from '@/modules/ledger/domain/movement';
+import { isValidScannedCode, normaliseScannedCode } from '@/modules/catalog/schema';
+import { emit } from '@/modules/events/service';
+import { MOVEMENT_REASONS, validateMovement } from '@/modules/ledger/schema';
 import { ApiError } from '../domain/errors.ts';
 import type { WriteContext, WriteResult } from './write.ts';
 

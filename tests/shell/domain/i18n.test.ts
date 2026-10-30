@@ -217,7 +217,7 @@ test('a key used in the app but missing from the dictionaries is detectable', ()
     'src/modules/ledger/ui/StockListScreen.tsx',
     'src/modules/ledger/ui/StockHistoryScreen.tsx',
     'src/modules/branch-usage/ui/StockUsageScreen.tsx',
-    'src/app/reports/page.tsx',
+    'src/app/(app)/reports/page.tsx',
     'src/modules/reports/ui/ReplenishmentScreen.tsx',
     'src/proxy.ts',
     'src/i18n/index.ts',

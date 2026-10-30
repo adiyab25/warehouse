@@ -1,1 +1,1 @@
-export * from './server/locations';
+export * from './db';

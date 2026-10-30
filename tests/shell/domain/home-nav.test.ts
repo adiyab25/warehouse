@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { navLinksForRole } from '@/modules/shell/domain/nav';
+import { navLinksForRole } from '@/modules/shell/schema';
 import { hasKey } from '@/i18n/index';
 
 test('a warehouse role sees every screen', () => {

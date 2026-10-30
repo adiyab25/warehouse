@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { SESSION_COOKIE, sessionCookieName } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE, sessionCookieName } from '@/modules/auth/schema';
 import {
   ERROR_PARAM,
   SIGNED_IN_REDIRECT,

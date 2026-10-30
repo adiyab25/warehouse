@@ -1,4 +1,4 @@
-import { SESSION_COOKIE, sessionCookieName } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE, sessionCookieName } from '@/modules/auth/schema';
 
 /**
  * The sign-in form's GET contract — the shapes the action produces and the form

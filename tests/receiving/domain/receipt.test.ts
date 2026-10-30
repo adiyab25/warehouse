@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { lineVariance, packToUnits } from '@/modules/receiving/domain/receipt';
+import { lineVariance, packToUnits } from '@/modules/receiving/schema';
 
 /**
  * Unit tests for the receipt rules — the pure functions the receiving path runs

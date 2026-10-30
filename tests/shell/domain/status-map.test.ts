@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { STATUS_MAP, ALL_STATUSES } from '../../../src/modules/shell/domain/status';
+import { STATUS_MAP, ALL_STATUSES } from '../../../src/modules/shell/schema';
 
 const CHECK_STATUSES = ['draft','receiving','posted','requested','approved','partially_issued','issued','received','closed','rejected','returned','open','fulfilled','short'];
 

@@ -18,7 +18,7 @@ import { createSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
 import { transitLocation } from '@/modules/locations/index';
 import { onHand } from '@/modules/ledger/index';
-import type { RequisitionStatus } from '@/modules/requisitions/domain/requisition';
+import type { RequisitionStatus } from '@/modules/requisitions/schema';
 import {
   REFUSAL_MESSAGE_KEYS,
   availableActions,
@@ -26,7 +26,7 @@ import {
   confirmProblem,
   issueAnchor,
   type RequisitionRefusal,
-} from '@/modules/requisitions/domain/requisition-ui';
+} from '@/modules/requisitions/schema';
 import { hasKey } from '@/i18n/index';
 import { REPO_ROOT, migrateUrl, sqlTestUrl, withDb } from '../../harness/sql.ts';
 
@@ -727,7 +727,7 @@ test('a from that is too large is refused and posts nothing', { skip: !sqlTestUr
 // ---------------------------------------------------------------------------
 
 test('the ledger key format lives in ONE dependency-free module', () => {
-  const modulePath = join(REPO_ROOT, 'src', 'modules', 'requisitions', 'domain', 'requisition-keys.ts');
+  const modulePath = join(REPO_ROOT, 'src', 'modules', 'requisitions', 'schema.ts');
   const source = readFileSync(modulePath, 'utf8');
 
   const imports = source.match(/^\s*import\b[^\n]*/gm) ?? [];
@@ -749,8 +749,8 @@ test('the ledger key format lives in ONE dependency-free module', () => {
 
   // Both the ledger and the screen layer import the ONE implementation, so the
   // two can no longer drift apart (the drift that posted a second movement).
-  const ledger = readFileSync(join(REPO_ROOT, 'src', 'modules', 'requisitions', 'server', 'requisitions.ts'), 'utf8');
-  const screenLayer = readFileSync(join(REPO_ROOT, 'src', 'modules', 'requisitions', 'domain', 'requisition-ui.ts'), 'utf8');
-  assert.match(ledger, /from '\.\.\/domain\/requisition-keys\.ts'/, 'the ledger imports the key builders');
-  assert.match(screenLayer, /from '\.\/requisition-keys\.ts'/, 'the screen layer imports the key builders');
+  const ledger = readFileSync(join(REPO_ROOT, 'src', 'modules', 'requisitions', 'db.ts'), 'utf8');
+  const screenLayer = readFileSync(join(REPO_ROOT, 'src', 'modules', 'requisitions', 'schema.ts'), 'utf8');
+  assert.match(ledger, /from '\.\/schema.ts'/, 'the ledger imports the key builders');
+  // screen layer is now in same file
 });

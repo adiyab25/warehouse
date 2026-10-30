@@ -1,7 +1,6 @@
 import { formatNumber, t } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
 import type { StockRowView } from '@/app/stock/handler';
-import { DataTable } from '@/modules/shell/ui/DataTable';
 import { EmptyState } from '@/modules/shell/ui/EmptyState';
 import { FilterBar } from '@/modules/shell/ui/FilterBar';
 
@@ -46,23 +45,29 @@ export async function StockListScreen({ rows, search, truncated, branchLabel }: 
       {rows.length === 0 ? (
         <EmptyState title={t('stock.list.empty', lang)} />
       ) : (
-        <DataTable
-          data={rows as any}
-          columns={[
-            {
-              key: 'item',
-              header: t('stock.col.item', lang),
-              render: (row: StockRowView) => (
-                <a className="text-primary" href={`/stock/${row.variantId}`}>
-                  <span className="font-medium">{row.nameAr}</span>
-                  <span className="ltr-value ml-2 text-xs text-muted-foreground">{row.sku}</span>
-                </a>
-              ),
-            },
-            { key: 'location', header: t('stock.col.location', lang), render: (row: StockRowView) => row.location },
-            { key: 'qty', header: t('stock.col.qty', lang), render: (row: StockRowView) => formatNumber(Number(row.qty), lang) },
-          ]}
-        />
+        <table className="w-full text-sm">
+          <thead>
+            <tr>
+              <th className="text-left p-2">{t('stock.col.item', lang)}</th>
+              <th className="text-left p-2">{t('stock.col.location', lang)}</th>
+              <th className="text-left p-2">{t('stock.col.qty', lang)}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+                          <tr key={row.variantId + '-' + row.location + '-' + i} className="border-t">
+                <td className="p-2">
+                  <a className="text-primary" href={`/stock/${row.variantId}`}>
+                    <span className="font-medium">{row.nameAr}</span>
+                    <span className="ltr-value ml-2 text-xs text-muted-foreground">{row.sku}</span>
+                  </a>
+                </td>
+                <td className="p-2">{row.location}</td>
+                <td className="p-2">{formatNumber(Number(row.qty), lang)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
       {truncated ? (

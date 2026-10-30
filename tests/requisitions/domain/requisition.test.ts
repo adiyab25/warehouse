@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { allowedTransitions, canConfirm } from '@/modules/requisitions/domain/requisition';
+import { allowedTransitions, canConfirm } from '@/modules/requisitions/schema';
 
 /**
  * Unit tests for the requisition rules — the pure functions the flow judges a

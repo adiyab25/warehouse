@@ -1,4 +1,4 @@
-import { generateToken, hashToken } from '@/modules/auth/domain/token';
+import { generateToken, hashToken } from '@/modules/auth/schema';
 import { withTenant, type Queryable } from '@/modules/platform/index';
 import type { ApiClient } from '@/modules/platform/index';
 

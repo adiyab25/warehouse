@@ -3,7 +3,7 @@ import { readRoute } from '@/modules/api/index';
 import { writeRoute } from '@/modules/api/index';
 import { optEnum, optInstant, optUuid, parseCursor, parseLimit } from '@/modules/api/domain/params';
 import { listMovements } from '@/modules/api/index';
-import { MOVEMENT_REASONS } from '@/modules/ledger/domain/movement';
+import { MOVEMENT_REASONS } from '@/modules/ledger/schema';
 
 /**
  * GET /api/v1/movements — "where did it go". Newest first by `seq` (NOT

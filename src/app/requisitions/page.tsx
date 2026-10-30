@@ -1,12 +1,12 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { configuredTenantId } from '@/modules/auth/index';
 import { RequisitionListScreen } from '@/modules/requisitions/ui/RequisitionListScreen';
 import { getAppPool } from '@/modules/platform/index';
 import { withTenant } from '@/modules/platform/index';
-import { REFUSAL_MESSAGE_KEYS } from '@/modules/requisitions/domain/requisition-ui';
+import { REFUSAL_MESSAGE_KEYS } from '@/modules/requisitions/schema';
 import { t } from '../../i18n';
 import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../(auth)/sign-in/contract';

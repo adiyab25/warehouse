@@ -18,7 +18,7 @@ import {
   locationLabelSvg,
   truncateToWidth,
   variantLabelSvg,
-} from '@/modules/catalog/domain/labels';
+} from '@/modules/catalog/schema';
 import {
   FUZZ_BAND_MM,
   FUZZ_CASES,

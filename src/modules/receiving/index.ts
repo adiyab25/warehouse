@@ -1,3 +1,2 @@
-export * from './server/receipts';
-export * from './domain/receipt';
-export * from './domain/intake';
+export * from './db';
+export * from './schema';

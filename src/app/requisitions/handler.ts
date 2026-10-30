@@ -1,6 +1,6 @@
 import { currentUser, type CurrentUser } from '@/modules/auth/index';
 import type { Queryable } from '@/modules/platform/index';
-import { isUuid } from '@/modules/platform/domain/ids';
+import { isUuid } from '@/modules/platform/schema';
 import {
   approve,
   confirmReceipt,
@@ -19,7 +19,7 @@ import {
   round3,
   type RequisitionActionSet,
   type RequisitionRefusal,
-} from '@/modules/requisitions/domain/requisition-ui';
+} from '@/modules/requisitions/schema';
 
 /**
  * The REQUISITION SCREENS' LOGIC, with the request boundary left OUT.

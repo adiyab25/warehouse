@@ -1,6 +1,6 @@
 'use client';
 import { Badge } from '@/components/ui/badge';
-import { statusEntry, type StatusToken } from '../domain/status';
+import { statusEntry, type StatusToken } from '../schema';
 
 const TOKEN_CLASS: Record<StatusToken, string> = {
   ok: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/30',

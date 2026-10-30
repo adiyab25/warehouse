@@ -7,7 +7,7 @@ import { after, before, test } from 'node:test';
 
 import { Client } from 'pg';
 
-import { sessionCookieName } from '@/modules/auth/domain/cookie';
+import { sessionCookieName } from '@/modules/auth/schema';
 import { createSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
 import { REPO_ROOT, migrateUrl, sqlTestUrl } from '../../harness/sql.ts';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { formatSku, isValidScannedCode, normaliseScannedCode } from '@/modules/catalog/domain/barcode';
+import { formatSku, isValidScannedCode, normaliseScannedCode } from '@/modules/catalog/schema';
 
 /**
  * Unit tests for the barcode helpers — the pure functions a scan route runs

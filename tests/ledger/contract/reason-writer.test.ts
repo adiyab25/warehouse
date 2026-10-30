@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Client } from 'pg';
@@ -11,11 +11,11 @@ import { migrateUrl } from '../../harness/sql.ts';
 // of P1 — each entry removed only when a writer lands in src/modules/**/server.
 const ALLOWED_GAPS = new Set(['transfer', 'consumption', 'sale']);
 
-function collectServerFiles(dir: string): string[] {
+function collectFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collectServerFiles(full));
+    if (entry.isDirectory()) out.push(...collectFiles(full));
     else if (entry.isFile() && (full.endsWith('.ts') || full.endsWith('.tsx') || full.endsWith('.sql'))) out.push(full);
   }
   return out;
@@ -46,8 +46,17 @@ test('every movement reason has at least one writer in src/modules/**/server', {
   const files: string[] = [];
   for (const mod of readdirSync(root, { withFileTypes: true })) {
     if (!mod.isDirectory()) continue;
+    const dbFile = join(root, mod.name, 'db.ts');
+    if (existsSync(dbFile)) files.push(dbFile);
+    const schemaFile = join(root, mod.name, 'schema.ts');
+    if (existsSync(schemaFile)) files.push(schemaFile);
+    // legacy server/ dir (not yet refactored)
     const serverDir = join(root, mod.name, 'server');
-    try { files.push(...collectServerFiles(serverDir)); } catch { /* no server dir */ }
+    if (existsSync(serverDir)) {
+      for (const e of readdirSync(serverDir, { withFileTypes: true })) {
+        if (e.isFile() && e.name.endsWith('.ts')) files.push(join(serverDir, e.name));
+      }
+    }
   }
 
   const writers = new Set<string>();

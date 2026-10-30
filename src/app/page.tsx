@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { loadCurrentUser } from '@/modules/auth/index';
 import { KpiCard } from '@/modules/shell/ui/KpiCard';
 import { PageHeader } from '@/modules/shell/ui/PageHeader';
-import { navLinksForRole } from '@/modules/shell/domain/nav';
+import { navLinksForRole } from '@/modules/shell/schema';
 import { t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 import { SIGN_IN_PATH } from './(auth)/sign-in/contract';

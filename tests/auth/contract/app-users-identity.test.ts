@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 
-import { normaliseName } from '@/modules/platform/domain/text';
+import { normaliseName } from '@/modules/platform/schema';
 import { withTenant } from '@/modules/platform/index';
 import { sqlTestUrl, withDb } from '../../harness/sql.ts';
 import { cleanupTenants, provisionTenants } from '../../harness/tenants.ts';

@@ -4,9 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import { requestLines } from '@/app/requisitions/actions';
-import type { RequisitionRefusal } from '../domain/requisition-ui';
-import { REFUSAL_MESSAGE_KEYS } from '../domain/requisition-ui';
-import type { RequisitionStatus } from '../domain/requisition';
+import type { RequisitionRefusal } from '../schema';
+import { REFUSAL_MESSAGE_KEYS } from '../schema';
+import type { RequisitionStatus } from '../schema';
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
 import { EmptyState } from '@/modules/shell/ui/EmptyState';
 import { PageHeader } from '@/modules/shell/ui/PageHeader';

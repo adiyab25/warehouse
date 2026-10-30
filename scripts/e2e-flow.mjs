@@ -40,16 +40,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import pg from 'pg';
 
-import { createAppPool } from '../src/modules/platform/server/tenant-scope.ts';
+import { createAppPool } from '../src/modules/platform/service.ts';
 import { issueClient } from '../src/modules/api/server/api-clients.ts';
-import { withTenant } from '../src/modules/platform/server/db.ts';
-import { closeCount, openCount, recordCount } from '../src/modules/counts/server/counts.ts';
-import { createItem, findVariantById } from '../src/modules/catalog/server/items.ts';
-import { createLocation } from '../src/modules/locations/server/locations.ts';
-import { movementHistory, onHand } from '../src/modules/ledger/server/movements.ts';
-import { createReceipt, postReceipt } from '../src/modules/receiving/server/receipts.ts';
-import { approve, confirmReceipt, createRequisition, issue } from '../src/modules/requisitions/server/requisitions.ts';
-import { returnRequisition } from '../src/modules/returns/server/returns.ts';
+import { withTenant } from '../src/modules/platform/db.ts';
+import { closeCount, openCount, recordCount } from '../src/modules/counts/db.ts';
+import { createItem, findVariantById } from '../src/modules/catalog/db.ts';
+import { createLocation } from '../src/modules/locations/db.ts';
+import { movementHistory, onHand } from '../src/modules/ledger/db.ts';
+import { createReceipt, postReceipt } from '../src/modules/receiving/db.ts';
+import { approve, confirmReceipt, createRequisition, issue } from '../src/modules/requisitions/db.ts';
+import { returnRequisition } from '../src/modules/returns/db.ts';
 import { DEMO_TENANT_ID, seedTenant } from './seed.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -303,7 +303,7 @@ export async function runInProcess({ ownerUrl, appUrl, http = null, log = () => 
   const out = { steps: [], reasons: [], cleanup: { rowsLeft: -1 }, reconciliation: null, http: null, tenantA: null };
   let failure;
   try {
-    const pw = { owner: rnd(10), manager: rnd(10), branch: rnd(10) };
+    const pw = { admin: rnd(10), manager: rnd(10), branch: rnd(10) };
     const seeded = await seedTenant({ ownerUrl, appUrl, name: `e2e-A-${rnd()}`, passwords: pw });
     const tenantA = seeded.tenantId;
     ids.push(tenantA);

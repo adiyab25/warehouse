@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 import { checkNote, scan, submitReceipt } from '@/app/intake/actions';
 import type { SubmitOutcome } from '@/app/intake/handler';
-import { REFUSAL_MESSAGE_KEYS, type IntakeRefusal, type ReceiptForm } from '../domain/intake';
+import { REFUSAL_MESSAGE_KEYS, type IntakeRefusal, type ReceiptForm } from '../schema';
 import { formatDate, formatNumber, t, type Lang } from '@/i18n';
 import { ExpectedVsReceived, type ExpectedVsReceivedLine } from './ExpectedVsReceived';
 import { ScanField } from '@/modules/shell/ui/ScanField';

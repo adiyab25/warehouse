@@ -9,7 +9,7 @@ import { withTenant } from '@/modules/platform/index';
 import { createItem, setLocationLevel } from '@/modules/catalog/index';
 import { createLocation } from '@/modules/locations/index';
 import { postMovement } from '@/modules/ledger/index';
-import { MOVEMENT_REASONS } from '@/modules/ledger/domain/movement';
+import { MOVEMENT_REASONS } from '@/modules/ledger/schema';
 import { API_ALLOWED_REASONS, executeMovement, parseMovementBody } from '@/modules/api/index';
 import { GET as getMovements, POST as postMovements } from '../../src/app/api/v1/movements/route.ts';
 import { GET as getOnHand } from '../../src/app/api/v1/on-hand/route.ts';

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarHeader, SidebarFooter } from '@/components/ui/sidebar';
-import { navLinksForRole } from '@/modules/shell/domain/nav';
+import { navLinksForRole } from '@/modules/shell/schema';
 
 export function AppSidebar({ role, lang }: { role: string | null | undefined; lang: "ar" | "en" }) {
   const links = navLinksForRole(role);

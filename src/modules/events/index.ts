@@ -1,1 +1,1 @@
-export * from './domain/events';
+export * from './service';

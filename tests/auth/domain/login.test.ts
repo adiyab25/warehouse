@@ -7,7 +7,7 @@ import {
   parseLockoutConfig,
   signIn,
 } from '@/modules/auth/index';
-import { hashPassword } from '@/modules/auth/domain/password';
+import { hashPassword } from '@/modules/auth/schema';
 import type { Queryable } from '@/modules/platform/index';
 
 /**

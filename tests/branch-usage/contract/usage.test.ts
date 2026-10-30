@@ -16,7 +16,7 @@ import {
   usageByBranch,
   usageTotalEgp,
 } from '@/modules/branch-usage/index';
-import { MOVEMENT_REASONS, REASON_MESSAGE_KEYS } from '@/modules/ledger/domain/movement';
+import { MOVEMENT_REASONS, REASON_MESSAGE_KEYS } from '@/modules/ledger/schema';
 import { hasKey } from '@/i18n/index';
 import { getUsageReport, getVariantHistory, listStock, monthWindow } from '@/app/stock/handler';
 import { migrateUrl, sqlTestUrl, withDb } from '../../harness/sql.ts';

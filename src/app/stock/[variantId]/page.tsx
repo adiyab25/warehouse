@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { configuredTenantId } from '@/modules/auth/index';
 import { StockHistoryScreen } from '@/modules/ledger/ui/StockHistoryScreen';
 import { getAppPool } from '@/modules/platform/index';

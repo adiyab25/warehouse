@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { hashPassword, verifyPassword } from '@/modules/auth/domain/password';
+import { hashPassword, verifyPassword } from '@/modules/auth/schema';
 
 /**
  * Unit tests for password hashing — the credential a PERSON signs in with.

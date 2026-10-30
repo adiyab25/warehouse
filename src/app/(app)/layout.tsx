@@ -4,7 +4,7 @@ import { SidebarProvider } from '@/components/ui/sidebar';
 import { DirectionProvider } from '@/components/ui/direction';
 import { DIRECTION } from '@/i18n';
 import { getRequestLang } from '@/i18n/request';
-import { loadCurrentUser } from '@/modules/auth/server/current-user';
+import { loadCurrentUser } from '@/modules/auth/db';
 import { AppSidebar } from '@/modules/shell/ui/AppSidebar';
 import { TopBar } from '@/modules/shell/ui/TopBar';
 

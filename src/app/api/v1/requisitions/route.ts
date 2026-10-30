@@ -1,7 +1,7 @@
 import { readRoute } from '@/modules/api/index';
 import { optEnum, optUuid, parseCursor, parseLimit } from '@/modules/api/domain/params';
 import { listRequisitions } from '@/modules/api/index';
-import type { RequisitionStatus } from '@/modules/requisitions/domain/requisition';
+import type { RequisitionStatus } from '@/modules/requisitions/schema';
 
 /** The closed state list (mirrors `requisitions_status_check`). */
 const REQUISITION_STATUSES = [

@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 
 import { Client } from 'pg';
 
-import { SESSION_COOKIE } from '@/modules/auth/domain/cookie';
+import { SESSION_COOKIE } from '@/modules/auth/schema';
 import { createSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
 import { createItem } from '@/modules/catalog/index';
