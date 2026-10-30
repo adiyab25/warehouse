@@ -1,39 +1,50 @@
-import { canApproveOrIssue } from '@/modules/requisitions/schema';
+import { can, PERMISSION } from '@/modules/auth/keys';
 
 /**
- * A signed-in user's home-page navigation, as a pure list of links.
+ * A signed-in user's navigation, as a pure list of links.
  *
- * Kept here (not inline in `src/app/page.tsx`) so the role-aware behaviour is
- * testable: the home page is the front door, and a dead-end front door is the
- * "white page after login" defect — the screens existed but nothing linked to
- * them. Least privilege by default: a role we do not recognise sees only the
- * screens everyone shares, never the warehouse-only ones.
+ * Kept here (not inline in the layout) so the behaviour is testable: the nav is
+ * the only way into most screens, and a dead-end front door is the "white page
+ * after login" defect this app already shipped once.
+ *
+ * EACH LINK NAMES THE PERMISSION THAT REACHES IT. It used to ask the role enum,
+ * which means a role the tenant created saw no menu at all — the screens existed
+ * and the permissions were granted, but nothing linked to them. The permission
+ * set is what the session carries, so the menu now follows the tenant's own
+ * roles.
  */
 export interface HomeNavLink {
   href: string;
   /** The i18n key for the link's label. */
   key: string;
+  /** The permission key that puts this link on the menu. */
+  permission: string;
 }
 
-/** The screens every signed-in role may reach. Stock and requisitions are the
- * two things both the warehouse and a branch participate in. */
-const EVERYONE: HomeNavLink[] = [
-  { href: '/stock', key: 'stock.title' },
-  { href: '/requisitions', key: 'requisitions.title' },
+/** Every screen the app has, in menu order. */
+const LINKS: HomeNavLink[] = [
+  { href: '/stock', key: 'stock.title', permission: PERMISSION.stockView },
+  { href: '/requisitions', key: 'requisitions.title', permission: PERMISSION.requisitionsView },
+  { href: '/intake', key: 'intake.title', permission: PERMISSION.intakeView },
+  { href: '/stock/usage', key: 'stock.usage.heading', permission: PERMISSION.usageView },
+  { href: '/reports', key: 'reports.heading', permission: PERMISSION.reportsBasic },
+  { href: '/roles', key: 'admin.roles.title', permission: PERMISSION.rolesManage },
+  { href: '/users', key: 'admin.users.title', permission: PERMISSION.usersManage },
 ];
 
-/** The screens only the warehouse side may reach. `canApproveOrIssue` is the
- * warehouse function (`owner` / `warehouse_manager`) and is disjoint from the
- * branch's `canRequest` — the owner of a request can never approve it. */
-const WAREHOUSE_ONLY: HomeNavLink[] = [
-  { href: '/intake', key: 'intake.title' },
-  { href: '/stock/usage', key: 'stock.usage.heading' },
-  { href: '/reports', key: 'reports.heading' },
-];
+/**
+ * The menu for a permission set — least privilege by default.
+ *
+ * A missing set, an empty set or an unknown key yields no link, which is the
+ * safe default for a navigation that is also the only route to administration.
+ */
+export function navLinksForPermissions(
+  permissions: readonly string[] | null | undefined,
+): HomeNavLink[] {
+  return LINKS.filter((link) => can(permissions, link.permission));
+}
 
-export function navLinksForRole(role: string | null | undefined): HomeNavLink[] {
-  return canApproveOrIssue(role) ? [...EVERYONE, ...WAREHOUSE_ONLY] : [...EVERYONE];
-}// Maps every document/line status from DB CHECK constraints to a status token + i18n label key.
+// Maps every document/line status from DB CHECK constraints to a status token + i18n label key.
 export type StatusToken = 'ok' | 'waiting' | 'short' | 'transit' | 'draft';
 
 export interface StatusEntry {

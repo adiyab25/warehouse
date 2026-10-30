@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { loadCurrentUser } from '@/modules/auth/index';
 import { KpiCard } from '@/modules/shell/ui/KpiCard';
 import { PageHeader } from '@/modules/shell/ui/PageHeader';
-import { navLinksForRole } from '@/modules/shell/schema';
+import { navLinksForPermissions } from '@/modules/shell/schema';
 import { t } from '../i18n';
 import { getRequestLang } from '../i18n/request';
 import { SIGN_IN_PATH } from './(auth)/sign-in/contract';
@@ -16,9 +16,10 @@ import { SIGN_IN_PATH } from './(auth)/sign-in/contract';
  * unauthenticated visitor is redirected to the sign-in page. `loadCurrentUser`
  * resolves the session ONCE, inside one `withTenant` boundary.
  *
- * The links are role-aware (`navLinksForRole`): the warehouse side sees intake
- * and the reports, a branch sees exactly the screens it participates in. Every
- * label follows the request's resolved language.
+ * The links are PERMISSION-aware (`navLinksForPermissions`): each screen names
+ * the permission that reaches it, so a role the tenant created sees exactly the
+ * screens it was granted — including the admin screens, which no role enum
+ * could ever have offered. Every label follows the request's resolved language.
  */
 export default async function HomePage() {
   const lang = await getRequestLang();
@@ -61,7 +62,7 @@ export default async function HomePage() {
 
       <nav className="mt-6">
         <ul className="space-y-1">
-          {navLinksForRole(user.role).map((l) => (
+          {navLinksForPermissions(user.permissions).map((l) => (
             <li key={l.href}>
               <Link href={l.href}>{t(l.key, lang)}</Link>
             </li>

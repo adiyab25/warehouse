@@ -3,10 +3,17 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarHeader, SidebarFooter } from '@/components/ui/sidebar';
-import { navLinksForRole } from '@/modules/shell/schema';
+import { t, type Lang } from '@/i18n';
+import { navLinksForPermissions } from '@/modules/shell/schema';
 
-export function AppSidebar({ role, lang }: { role: string | null | undefined; lang: "ar" | "en" }) {
-  const links = navLinksForRole(role);
+export function AppSidebar({
+  permissions,
+  lang,
+}: {
+  permissions: readonly string[];
+  lang: Lang;
+}) {
+  const links = navLinksForPermissions(permissions);
   return (
     <Sidebar>
       <SidebarHeader>
@@ -19,7 +26,7 @@ export function AppSidebar({ role, lang }: { role: string | null | undefined; la
             {links.map((l) => (
               <SidebarMenuItem key={l.href}>
                 <SidebarMenuButton asChild>
-                  <Link href={l.href}>{l.key}</Link>
+                  <Link href={l.href}>{t(l.key, lang)}</Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
