@@ -16,6 +16,7 @@
     "ci": "node scripts/ci.mjs",
     "import:opening": "node --import tsx scripts/import-opening.mjs",
     "seed": "node --import tsx scripts/seed.mjs",
+    "seed:mock": "node --import tsx scripts/seed-mock.mjs",
     "e2e": "node --import tsx scripts/e2e-flow.mjs"
   },
   "keywords": [],
