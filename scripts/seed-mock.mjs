@@ -34,6 +34,7 @@ import { createAppPool } from '../src/modules/platform/service.ts';
 import { withTenant } from '../src/modules/platform/db.ts';
 import { createItem, setLocationLevel } from '../src/modules/catalog/db.ts';
 import { postMovement } from '../src/modules/ledger/db.ts';
+import { approve, createRequisition, issue } from '../src/modules/requisitions/db.ts';
 
 const TENANT = "nullif(current_setting('app.tenant_id', true), '')::uuid";
 const pad = (n) => String(n).padStart(2, '0');
@@ -135,6 +136,21 @@ export const BRANCH_STOCK = [
   ['CON-TIS-01', 'BR-02', 12],
 ];
 
+/**
+ * Requisitions in the states a person needs to try the flow:
+ * two `requested` (the warehouse has something to approve), an `approved` (ready
+ * to issue) and an `issued` one (in transit, the branch has something to
+ * confirm). The branch user is the requester — the record names the person who
+ * asked, as it must.
+ */
+export const REQUISITION_PLAN = [
+  { branch: 'BR-01', username: 'branch01', notes: '[mock] KG1 shirts - waiting for approval', state: 'requested', lines: [['UNI-KG1-TS-S', 12], ['UNI-KG1-TS-M', 15]] },
+  { branch: 'BR-02', username: 'branch02', notes: '[mock] KG1 pants - waiting for approval', state: 'requested', lines: [['UNI-KG1-PN-M', 10]] },
+  { branch: 'BR-06', username: 'branch06', notes: '[mock] consumables - waiting for approval', state: 'requested', lines: [['CON-TIS-01', 24], ['CON-SAN-01', 12]] },
+  { branch: 'BR-03', username: 'branch03', notes: '[mock] KG1 sweatshirts - approved, ready to issue', state: 'approved', lines: [['UNI-KG1-SW-M', 9]] },
+  { branch: 'BR-04', username: 'branch04', notes: '[mock] KG1 PE kit - in transit, ready to confirm', state: 'issued', lines: [['UNI-KG1-PE-M', 7]] },
+];
+
 async function main() {
   const url = process.env.APP_DATABASE_URL;
   const tenantId = process.env.TENANT_ID;
@@ -142,7 +158,7 @@ async function main() {
   if (!tenantId) throw new Error('seed-mock: TENANT_ID is not set');
 
   const pool = await createAppPool(url);
-  const summary = { branches: 0, items: 0, movements: 0, deduped: 0, levels: 0, skipped: [] };
+  const summary = { branches: 0, items: 0, movements: 0, deduped: 0, levels: 0, branchUsers: 0, requisitions: 0, requisitionsSkipped: 0, skipped: [] };
 
   try {
     await withTenant(pool, tenantId, async (db) => {
@@ -250,7 +266,16 @@ async function main() {
         }
       }
 
-      // --- 4. a little branch stock ------------------------------------
+      // --- 4. branch users (they ship with the seed; report what we found) --
+      const { rows: branchUsers } = await db.query(
+        `select u.id, u.username, u.branch_location_id
+           from app_users u
+          where u.tenant_id = ${TENANT} and u.role = 'branch_user' and u.active`,
+      );
+      summary.branchUsers = branchUsers.length;
+      const userByName = new Map(branchUsers.map((row) => [row.username, row]));
+
+      // --- 5. a little branch stock ------------------------------------
       for (const [sku, branchCode, qty] of BRANCH_STOCK) {
         const branchId = branchByCode.get(branchCode);
         if (!branchId) continue;
@@ -272,6 +297,60 @@ async function main() {
         if (posted.deduped) summary.deduped += 1;
         else summary.movements += 1;
       }
+      // --- 6. requisitions, one per state the flow has to be tried in ----
+      for (const plan of REQUISITION_PLAN) {
+        // Idempotent by the note: this script's own requisitions are the only
+        // rows that carry the `[mock]` marker.
+        const { rows: existing } = await db.query(
+          `select id from requisitions where tenant_id = ${TENANT} and notes = $1 limit 1`,
+          [plan.notes],
+        );
+        if (existing[0]) {
+          summary.requisitionsSkipped += 1;
+          continue;
+        }
+
+        const requester = userByName.get(plan.username);
+        const branchId = requester?.branch_location_id ?? branchByCode.get(plan.branch);
+        if (!requester || !branchId) {
+          summary.skipped.push(`requisition ${plan.notes} (no user/branch)`);
+          continue;
+        }
+
+        const lines = [];
+        for (const [sku, qty] of plan.lines) {
+          const { rows: variant } = await db.query(
+            `select id from item_variants where tenant_id = ${TENANT} and barcode = $1`,
+            [sku],
+          );
+          if (variant[0]) lines.push({ variantId: variant[0].id, requestedQty: qty });
+        }
+        if (lines.length === 0) continue;
+
+        const created = await createRequisition(db, {
+          branchLocationId: branchId,
+          requestedBy: requester.id,
+          notes: plan.notes,
+          lines,
+        });
+        summary.requisitions += 1;
+
+        if (plan.state === 'requested') continue;
+
+        // Approve, and issue, through the REAL flow — so the document's status
+        // is the one the state machine produced, not a status written into a
+        // column by hand.
+        if (!actor) throw new Error('seed-mock: no warehouse user to approve/issue with');
+        await approve(db, created.id, actor);
+        if (plan.state === 'issued') {
+          await issue(
+            db,
+            created.id,
+            actor,
+            lines.map((line) => ({ variantId: line.variantId, qty: line.requestedQty })),
+          );
+        }
+      }
     });
   } finally {
     await pool.end();
@@ -282,8 +361,11 @@ async function main() {
     branches_upserted: summary.branches,
     items_created: summary.items,
     movements_posted: summary.movements,
-    already_there: summary.deduped + summary.skipped.length,
     min_levels_set: summary.levels,
+    branch_users: summary.branchUsers,
+    requisitions_created: summary.requisitions,
+    requisitions_already_there: summary.requisitionsSkipped,
+    already_there: summary.deduped + summary.skipped.length,
   });
   if (summary.skipped.length) {
     console.log(`seed-mock: ${summary.skipped.length} item(s) already existed and were left alone`);
