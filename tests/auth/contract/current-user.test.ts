@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 
+import { can, PERMISSION } from '@/modules/auth/keys';
 import { currentUser } from '@/modules/auth/index';
 import { createSession, readSession } from '@/modules/auth/index';
 import { withTenant } from '@/modules/platform/index';
@@ -124,5 +125,91 @@ test('a session of one tenant does not resolve under another tenant', { skip: !s
       "one tenant's session cookie must be meaningless in another tenant",
     );
     assert.equal(await withTenant(db, t2, (tdb) => readSession(tdb, token)), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The PERMISSION SET (P1 1A.3).
+//
+// `role` says whose data a person sees; `permissions` says what they may DO.
+// The set is resolved with the session on every request — never cached at
+// sign-in — so a tenant that edits a role is obeyed on the very next request,
+// which is the decision (D3) that made session version bumps unnecessary for
+// permission edits.
+// ---------------------------------------------------------------------------
+
+test('the session carries the permission set of the assigned role', { skip: !sqlTestUrl() }, async () => {
+  const { t1, u1 } = await provisionTenants();
+
+  await withDb(async (db) => {
+    const { token } = await withTenant(db, t1, (tdb) => createSession(tdb, { userId: u1 }));
+    const user = await withTenant(db, t1, (tdb) => currentUser(tdb, token));
+
+    assert.ok(user);
+    assert.ok(
+      can(user.permissions, PERMISSION.requisitionsApprove),
+      'the seeded Owner role holds every permission, so approving is allowed',
+    );
+    assert.equal(
+      can(user.permissions, 'made:up:key'),
+      false,
+      'a key that does not exist grants nothing — an unknown key must deny',
+    );
+  });
+});
+
+test('editing the role changes the NEXT request, with no re-login', { skip: !sqlTestUrl() }, async () => {
+  const { t1 } = await provisionTenants();
+
+  await withDb(async (db) => {
+    // A tenant-created role that may ONLY approve — not a name the code knows.
+    const userId = await withTenant(db, t1, async (tdb) => {
+      const { rows: role } = await tdb.query<{ id: string }>(
+        `insert into roles (tenant_id, name, description)
+         values (nullif(current_setting('app.tenant_id', true), '')::uuid, 'Approver', 'approve only')
+         returning id`,
+      );
+      const roleId = role[0]!.id;
+      await tdb.query(
+        `insert into role_permissions (role_id, tenant_id, permission_key)
+         values ($1, nullif(current_setting('app.tenant_id', true), '')::uuid, $2)`,
+        [roleId, PERMISSION.requisitionsApprove],
+      );
+      const { rows: user } = await tdb.query<{ id: string }>(
+        `insert into app_users (tenant_id, name, name_normalised, username, role, password_hash, role_id)
+         values (nullif(current_setting('app.tenant_id', true), '')::uuid, 'Approver One',
+                 public.normalise_name('Approver One'), 'approver_one', 'branch_user', 'x', $1)
+         returning id`,
+        [roleId],
+      );
+      return user[0]!.id;
+    });
+
+    const { token } = await withTenant(db, t1, (tdb) => createSession(tdb, { userId }));
+    const first = await withTenant(db, t1, (tdb) => currentUser(tdb, token));
+    assert.ok(first);
+    assert.equal(
+      can(first.permissions, PERMISSION.requisitionsApprove),
+      true,
+      'a role the tenant invented grants exactly what it lists',
+    );
+    assert.equal(
+      can(first.permissions, PERMISSION.requisitionsIssue),
+      false,
+      'and nothing it does not list',
+    );
+
+    // Revoke the permission behind the SAME live session.
+    await withTenant(db, t1, (tdb) =>
+      tdb.query('delete from role_permissions where permission_key = $1', [PERMISSION.requisitionsApprove]),
+    );
+
+    const second = await withTenant(db, t1, (tdb) => currentUser(tdb, token));
+    assert.ok(second, 'the session is still live — permissions changed, not the sign-in');
+    assert.equal(
+      can(second.permissions, PERMISSION.requisitionsApprove),
+      false,
+      'the next request must see the edit, with no re-login and no version bump',
+    );
   });
 });

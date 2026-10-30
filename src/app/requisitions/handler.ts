@@ -1,4 +1,4 @@
-import { currentUser, type CurrentUser } from '@/modules/auth/index';
+import { can, currentUser, PERMISSION, type CurrentUser } from '@/modules/auth/index';
 import type { Queryable } from '@/modules/platform/index';
 import { isUuid } from '@/modules/platform/schema';
 import {
@@ -10,8 +10,6 @@ import {
 } from '@/modules/requisitions/index';
 import {
   availableActions,
-  canApproveOrIssue,
-  canRequest,
   confirmAnchor,
   confirmProblem,
   issueAnchor,
@@ -20,6 +18,7 @@ import {
   type RequisitionActionSet,
   type RequisitionRefusal,
 } from '@/modules/requisitions/schema';
+
 
 /**
  * The REQUISITION SCREENS' LOGIC, with the request boundary left OUT.
@@ -138,34 +137,50 @@ async function requireUser(db: Queryable, cookie: string | undefined | null): Pr
   return user;
 }
 
-/** The ONE warehouse gate: approve and issue. Everything that approves asks this. */
-async function requireWarehouse(db: Queryable, cookie: string | undefined | null): Promise<CurrentUser> {
+/**
+ * THE gate: the caller must hold `key` on the role assigned to them.
+ *
+ * There is no role name in this signature, so a caller cannot "helpfully"
+ * re-add a role shortcut: the only way to pass is a permission row the tenant's
+ * own roles screen can read and change, which is the whole point of P1 1A. The
+ * message names the KEY (what was missing) rather than a role (who the person
+ * is said to be), because the roles are the tenant's to edit and the key is not.
+ */
+async function requirePermission(
+  db: Queryable,
+  cookie: string | undefined | null,
+  key: string,
+): Promise<CurrentUser> {
   const user = await requireUser(db, cookie);
-  if (!canApproveOrIssue(user.role)) {
+  if (!can(user.permissions, key)) {
     throw new RequisitionError(
       'forbidden',
-      `Requisitions: approving and issuing are warehouse functions — role "${user.role}" may not do either.`,
+      `Requisitions: this account's role does not hold "${key}", so it may not perform this action.`,
     );
   }
   return user;
 }
 
+/** The warehouse gate: approve. */
+async function requireWarehouse(
+  db: Queryable,
+  cookie: string | undefined | null,
+  key: string,
+): Promise<CurrentUser> {
+  return requirePermission(db, cookie, key);
+}
+
 /**
- * The ONE branch gate: request and confirm. Resolves the caller's OWN branch
- * from `app_users.branch_location_id` — never from the request — so a branch
- * user cannot name a branch that is not theirs.
+ * The branch gate: request and confirm. Resolves the caller's OWN branch from
+ * `app_users.branch_location_id` — never from the request — so a branch user
+ * cannot name a branch that is not theirs.
  */
 async function requireBranch(
   db: Queryable,
   cookie: string | undefined | null,
+  key: string,
 ): Promise<{ user: CurrentUser; branchLocationId: string }> {
-  const user = await requireUser(db, cookie);
-  if (!canRequest(user.role)) {
-    throw new RequisitionError(
-      'forbidden',
-      `Requisitions: requesting and confirming are branch functions — role "${user.role}" may not do either.`,
-    );
-  }
+  const user = await requirePermission(db, cookie, key);
   const { rows } = await db.query<{ branch_location_id: string | null }>(
     `select branch_location_id from app_users where id = $1 and tenant_id = ${TENANT}`,
     [user.userId],
@@ -243,35 +258,37 @@ export async function listRequisitions(
   };
   if (!user) return empty;
 
-  const mayRequest = canRequest(user.role);
-  const mayApprove = canApproveOrIssue(user.role);
+  const mayRequest = can(user.permissions, PERMISSION.requisitionsCreate);
+  const mayApprove = can(user.permissions, PERMISSION.requisitionsApprove);
   if (!mayRequest && !mayApprove) return empty;
 
-  let branchLocationId: string | null = null;
+  // Scoping follows the PERSON'S ASSIGNMENT, not their role name: whoever has a
+  // branch on their account sees that branch and no other. A user without one
+  // sees nothing (the filter compares against NULL) unless they hold the
+  // warehouse permission, which is the only thing that opens every branch.
+  const { rows } = await db.query<{ branch_location_id: string | null }>(
+    `select branch_location_id from app_users where id = $1 and tenant_id = ${TENANT}`,
+    [user.userId],
+  );
+  const branchLocationId: string | null = rows[0]?.branch_location_id ?? null;
   let branchLabel: string | null = null;
-  if (mayRequest) {
-    const { rows } = await db.query<{ branch_location_id: string | null }>(
-      `select branch_location_id from app_users where id = $1 and tenant_id = ${TENANT}`,
-      [user.userId],
+  if (branchLocationId) {
+    const { rows: branches } = await db.query<{ name_ar: string; code: string }>(
+      `select name_ar, code from locations where id = $1 and tenant_id = ${TENANT}`,
+      [branchLocationId],
     );
-    branchLocationId = rows[0]?.branch_location_id ?? null;
-    if (branchLocationId) {
-      const { rows: branches } = await db.query<{ name_ar: string; code: string }>(
-        `select name_ar, code from locations where id = $1 and tenant_id = ${TENANT}`,
-        [branchLocationId],
-      );
-      if (branches[0]) branchLabel = `${branches[0].name_ar} (${branches[0].code})`;
-    }
+    if (branches[0]) branchLabel = `${branches[0].name_ar} (${branches[0].code})`;
   }
 
   const params: unknown[] = [];
   let filter = '';
   // A BRANCH VIEWER SEES ONLY THEIR OWN BRANCH — enforced in SQL. A branch user
   // with no branch sees nothing (the filter would compare against NULL).
-  if (mayRequest && !mayApprove) {
+  if (!mayApprove) {
     params.push(branchLocationId);
     filter = ' and r.branch_location_id = $1';
   }
+
 
   const { rows: requisitions } = await db.query<{
     id: string;
@@ -396,7 +413,9 @@ export async function getRequisition(
 ): Promise<RequisitionDetailOutcome> {
   const user = await currentUser(db, cookie);
   if (!user) return { ok: false, error: 'unauthenticated' };
-  if (!canRequest(user.role) && !canApproveOrIssue(user.role)) return { ok: false, error: 'forbidden' };
+  const mayRequest = can(user.permissions, PERMISSION.requisitionsCreate);
+  const mayApprove = can(user.permissions, PERMISSION.requisitionsApprove);
+  if (!mayRequest && !mayApprove) return { ok: false, error: 'forbidden' };
   // A malformed id gets the SAME refusal a missing one does — the shape is
   // checked BEFORE the query, so an uncastable text id cannot 500 the page.
   if (!isUuid(id)) return { ok: false, error: 'invalid' };
@@ -430,7 +449,7 @@ export async function getRequisition(
   // both, so this cannot be used to probe what another branch has asked for.
   if (!header) return { ok: false, error: 'invalid' };
 
-  if (canRequest(user.role)) {
+  if (!mayApprove) {
     const { rows: mine } = await db.query<{ branch_location_id: string | null }>(
       `select branch_location_id from app_users where id = $1 and tenant_id = ${TENANT}`,
       [user.userId],
@@ -498,7 +517,11 @@ export async function getRequisition(
     requestedByName: header.requested_by_name,
     notes: header.notes,
     lines,
-    actions: availableActions(header.status, user.role),
+        actions: availableActions(header.status, {
+      mayApprove: can(user.permissions, PERMISSION.requisitionsApprove),
+      mayIssue: can(user.permissions, PERMISSION.requisitionsIssue),
+      mayConfirm: can(user.permissions, PERMISSION.requisitionsConfirm),
+    }),
   };
 }
 
@@ -702,7 +725,11 @@ export async function requestIn(
   cookie: string | undefined | null,
   form: RequestForm,
 ): Promise<{ requisitionId: string }> {
-  const { user, branchLocationId } = await requireBranch(db, cookie);
+  const { user, branchLocationId } = await requireBranch(
+    db,
+    cookie,
+    PERMISSION.requisitionsCreate,
+  );
 
   if (!Array.isArray(form?.lines) || form.lines.length === 0) {
     throw new RequisitionError('invalid', 'requestIn: a requisition needs at least one line.');
@@ -741,7 +768,7 @@ export async function approveIn(
   cookie: string | undefined | null,
   form: ApproveForm,
 ): Promise<{ status: RequisitionStatus }> {
-  const user = await requireWarehouse(db, cookie);
+  const user = await requireWarehouse(db, cookie, PERMISSION.requisitionsApprove);
   if (typeof form?.id !== 'string' || form.id.trim() === '') {
     throw new RequisitionError('invalid', 'approveIn: no requisition id was supplied.');
   }
@@ -785,7 +812,7 @@ export async function issueIn(
   cookie: string | undefined | null,
   form: FlowForm,
 ): Promise<{ status: RequisitionStatus }> {
-  const user = await requireWarehouse(db, cookie);
+  const user = await requireWarehouse(db, cookie, PERMISSION.requisitionsIssue);
   requireFlowForm(form, 'issueIn');
 
   // Take the header lock FIRST, so the reconciliation and the write are one
@@ -864,7 +891,11 @@ export async function confirmIn(
   cookie: string | undefined | null,
   form: FlowForm,
 ): Promise<{ status: RequisitionStatus }> {
-  const { user, branchLocationId } = await requireBranch(db, cookie);
+  const { user, branchLocationId } = await requireBranch(
+    db,
+    cookie,
+    PERMISSION.requisitionsConfirm,
+  );
   requireFlowForm(form, 'confirmIn');
 
   const requisition = await lockRequisition(db, form.id, 'confirmIn');

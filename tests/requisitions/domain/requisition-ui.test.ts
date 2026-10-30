@@ -190,8 +190,11 @@ after(async () => {
 // ---------------------------------------------------------------------------
 
 test('the confirm button is absent unless status is issued', () => {
-  const warehouse = 'warehouse_manager';
-  const branch = 'branch_user';
+  // The affordances are built from PERMISSION SETS, not role names — the tenant
+  // names its own roles, so a screen that asked "is this a warehouse_manager?"
+  // would be wrong for every role the tenant created.
+  const warehouse = { mayApprove: true, mayIssue: true, mayConfirm: false };
+  const branch = { mayApprove: false, mayIssue: false, mayConfirm: true };
 
   // Every state where NOTHING is in transit — the confirm affordance must be
   // ABSENT, for both roles. Rendering it unconditionally makes this fail.
@@ -227,15 +230,17 @@ test('a partially_issued requisition still offers the confirm affordance (rule 4
   // `partially_issued` too, and requiring a full issue before ANY confirm would
   // strand goods on the road with no way to close the document. Both partial and
   // full states therefore offer it — and nothing else does.
-  assert.equal(availableActions('partially_issued', 'branch_user').canConfirm, true);
-  assert.equal(availableActions('partially_issued', 'warehouse_manager').canConfirm, false);
+  const warehouse = { mayApprove: true, mayIssue: true, mayConfirm: false };
+  const branch = { mayApprove: false, mayIssue: false, mayConfirm: true };
+  assert.equal(availableActions('partially_issued', branch).canConfirm, true);
+  assert.equal(availableActions('partially_issued', warehouse).canConfirm, false);
   // Approve/issue are the warehouse's; a branch user gets neither.
-  assert.equal(availableActions('requested', 'warehouse_manager').canApprove, true);
-  assert.equal(availableActions('requested', 'branch_user').canApprove, false);
-  assert.equal(availableActions('approved', 'warehouse_manager').canIssue, true);
-  assert.equal(availableActions('partially_issued', 'warehouse_manager').canIssue, true);
-  assert.equal(availableActions('issued', 'warehouse_manager').canIssue, false);
-  assert.equal(availableActions('approved', 'branch_user').canIssue, false);
+  assert.equal(availableActions('requested', warehouse).canApprove, true);
+  assert.equal(availableActions('requested', branch).canApprove, false);
+  assert.equal(availableActions('approved', warehouse).canIssue, true);
+  assert.equal(availableActions('partially_issued', warehouse).canIssue, true);
+  assert.equal(availableActions('issued', warehouse).canIssue, false);
+  assert.equal(availableActions('approved', branch).canIssue, false);
 });
 
 test('confirming beyond the issued quantity is a wrong_state problem', () => {

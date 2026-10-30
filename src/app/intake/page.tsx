@@ -6,7 +6,7 @@ import { configuredTenantId } from '@/modules/auth/index';
 import { IntakeScreen } from '@/modules/receiving/ui/IntakeScreen';
 import { getAppPool } from '@/modules/platform/index';
 import { withTenant } from '@/modules/platform/index';
-import { canReceive } from '@/modules/receiving/schema';
+import { can, PERMISSION } from '@/modules/auth/keys';
 import { t } from '../../i18n';
 import { getRequestLang } from '../../i18n/request';
 import { SIGN_IN_PATH } from '../(auth)/sign-in/contract';
@@ -40,9 +40,10 @@ export default async function IntakePage() {
 
   if (!door.user) redirect(SIGN_IN_PATH);
 
-  // Belt and braces: the door already refused a role that may not receive, and
-  // the rule is asserted again on the person it actually resolved.
-  const mayReceive = door.mayReceive && canReceive(door.user.role);
+  // Belt and braces: the door already checked the permission, and it is
+  // asserted again on the person it actually resolved — against the SAME key
+  // the server action will check, so the screen and the write cannot disagree.
+  const mayReceive = door.mayReceive && can(door.user.permissions, PERMISSION.intakeCreate);
 
   const destName = door.dest ? `${door.dest.name_ar} (${door.dest.code})` : null;
 

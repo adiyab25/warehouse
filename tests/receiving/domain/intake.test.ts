@@ -827,7 +827,11 @@ test('SMOKE (source grep): the intake actions still look like the app’s one se
 
   const page = readFileSync(join(REPO_ROOT, 'src', 'app', 'intake', 'page.tsx'), 'utf8');
   assert.match(page, /frontDoor\(/, 'the page must resolve who is asking before it renders the door');
-  assert.match(page, /canReceive\(/, 'the page must refuse a role that may not receive goods');
+  assert.match(
+    page,
+    /PERMISSION\.intakeCreate/,
+    'the page must refuse an account whose role does not hold the intake permission',
+  );
   assert.match(page, /IntakeScreen/, 'the page must render the door');
   // Direction is now owned by the root layout (`dir={DIRECTION[lang]}`), so the
   // app flips RTL/LTR with the resolved language. A page hardcoding its own

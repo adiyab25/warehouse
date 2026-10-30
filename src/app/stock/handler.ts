@@ -13,6 +13,7 @@ import {
   type UsageRow,
 } from '@/modules/branch-usage/index';
 import { canApproveOrIssue, canRequest } from '@/modules/requisitions/schema';
+import { can, PERMISSION } from '@/modules/auth/keys';
 import { isUuid } from '@/modules/platform/schema';
 
 /**
@@ -375,9 +376,10 @@ export async function getUsageReport(
   if (!user) {
     return { ok: false, error: 'unauthenticated' };
   }
-  // A branch user — and any role that is neither owner nor warehouse_manager —
-  // is refused before any money is read.
-  if (!canApproveOrIssue(user.role)) {
+  // Cost data is a PERMISSION, not a seniority: the tenant decides which roles
+  // may see what their goods are worth. A branch user's role has no
+  // `reports:reports:cost`, so no branch ever reads the warehouse's money.
+  if (!can(user.permissions, PERMISSION.reportsCost)) {
     return { ok: false, error: 'forbidden' };
   }
 

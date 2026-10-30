@@ -1,4 +1,4 @@
-import { currentUser, type CurrentUser } from '@/modules/auth/index';
+import { can, currentUser, PERMISSION, type CurrentUser } from '@/modules/auth/index';
 import type { Queryable } from '@/modules/platform/index';
 import { findByBarcode } from '@/modules/catalog/index';
 import { findWarehouseLocation, vendorLocations } from '@/modules/locations/index';
@@ -85,10 +85,10 @@ export async function requireReceiver(
       'Intake: you are not signed in (or the session has ended) — sign in again.',
     );
   }
-  if (!canReceive(user.role)) {
+  if (!can(user.permissions, PERMISSION.intakeCreate)) {
     throw new IntakeError(
       'forbidden',
-      `Intake is a warehouse function: role "${user.role}" is not permitted to receive goods.`,
+      `Intake is a warehouse function: this account's role does not hold "${PERMISSION.intakeCreate}", so it is not permitted to receive goods.`,
     );
   }
   return user;
@@ -120,7 +120,7 @@ export async function frontDoor(
   cookie: string | undefined | null,
 ): Promise<FrontDoor> {
   const user = await currentUser(db, cookie);
-  if (!user || !canReceive(user.role)) {
+  if (!user || !can(user.permissions, PERMISSION.intakeCreate)) {
     return { user, mayReceive: false, sources: [], dest: null };
   }
 

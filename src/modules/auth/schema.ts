@@ -164,3 +164,11 @@ export function generateToken(): string {
 export function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
+
+/*
+ * The permission keys and `can()` live in ./keys.ts — a module with NO Node
+ * built-ins — and are re-exported here so a server caller has one import.
+ * A CLIENT component must import '@/modules/auth/keys' instead: this file
+ * pulls in `node:crypto`.
+ */
+export { PERMISSION, can, canAll, type PermissionKey } from './keys.ts';

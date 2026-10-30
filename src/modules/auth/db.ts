@@ -41,6 +41,16 @@ export interface CurrentUser {
   displayName: string;
   /** The assigned username the person signed in with. */
   username: string;
+  /**
+   * The permission keys the person's ROLE holds (`role_permissions`), resolved
+   * with the session so a screen asks "may I?" without a second round-trip.
+   *
+   * This is the AUTHORITY. `role` above is the legacy enum, kept because
+   * screens still use it to decide which data a person may SEE (a branch user
+   * sees their own branch); it must never decide whether an act is allowed —
+   * that is {@link can}.
+   */
+  permissions: readonly string[];
 }
 
 /**
@@ -61,8 +71,21 @@ export async function currentUser(
   const session = await readSession(db, cookieValue);
   if (!session) return null;
 
-  const { rows } = await db.query<{ name: string; username: string }>(
-    `select name, username from app_users where id = $1`,
+  // ONE read: the person's display row AND the permission set of their role.
+  // Joined on `role_id`, not on the enum, so a tenant that renames a role or
+  // edits its permissions is honoured on the very next request.
+  const { rows } = await db.query<{ name: string; username: string; permissions: string[] }>(
+    `select u.name,
+            u.username,
+            coalesce(
+              array_agg(rp.permission_key order by rp.permission_key)
+                filter (where rp.permission_key is not null),
+              '{}'
+            ) as permissions
+       from app_users u
+       left join role_permissions rp on rp.role_id = u.role_id
+      where u.id = $1
+      group by u.name, u.username`,
     [session.userId],
   );
   const person = rows[0];
@@ -74,6 +97,7 @@ export async function currentUser(
     role: session.role,
     displayName: person.name,
     username: person.username,
+    permissions: person.permissions ?? [],
   };
 }
 

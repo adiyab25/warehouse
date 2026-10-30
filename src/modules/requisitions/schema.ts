@@ -255,24 +255,40 @@ export interface RequisitionActionSet {
 export const canConfirmState = canConfirm;
 
 /**
- * The acts the detail view may render: the CURRENT state crossed with the
- * VIEWER'S role, and nothing else.
+ * What the VIEWER may do, in the abstract — computed once, from their
+ * permissions, by the caller.
  *
- * This is the function the screen's buttons are built from, so removing the
- * role half, or the state half, changes what a person can do — which is exactly
- * what the named test ('the confirm button is absent unless status is issued')
- * fails on when the guard is dropped.
+ * This module is dependency-free on purpose (it is pulled into `use client`
+ * components, so it may import nothing), which means it cannot know about
+ * permission keys. So the caller — which does — answers these three questions
+ * with `can(user.permissions, PERMISSION…)` and this module crosses them with
+ * the DOCUMENT'S STATE, which is the only other input the buttons need.
+ *
+ * Keeping the split explicit is the point: "who may act" is one answer, "what
+ * may be acted on right now" is another, and a screen that conflated them would
+ * offer Approve on a requisition that is already issued.
+ */
+export interface ViewerActs {
+  /** Holds the approve permission. */
+  mayApprove: boolean;
+  /** Holds the issue permission. */
+  mayIssue: boolean;
+  /** Holds the confirm (receipt) permission. */
+  mayConfirm: boolean;
+}
+
+/**
+ * The acts the detail view may render: the CURRENT state crossed with what the
+ * viewer may do, and nothing else.
  */
 export function availableActions(
   status: RequisitionStatus,
-  role: string | null | undefined,
+  acts: ViewerActs,
 ): RequisitionActionSet {
-  const warehouse = canApproveOrIssue(role);
-  const branch = canRequest(role);
   return {
-    canApprove: warehouse && status === 'requested',
-    canIssue: warehouse && (status === 'approved' || status === 'partially_issued'),
-    canConfirm: branch && canConfirm(status),
+    canApprove: acts.mayApprove && status === 'requested',
+    canIssue: acts.mayIssue && (status === 'approved' || status === 'partially_issued'),
+    canConfirm: acts.mayConfirm && canConfirm(status),
   };
 }
 
